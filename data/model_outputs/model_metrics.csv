@@ -1,0 +1,3 @@
+model,accuracy,roc_auc
+Logistic Regression,0.6132583743265402,0.6347164537279621
+Gradient-Boosted Trees,0.619309752479113,0.6437628887556932

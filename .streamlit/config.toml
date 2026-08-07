@@ -1,0 +1,10 @@
+# SMOKE dashboard theme. Navy and blue carry over from the capstone documents
+# so every project artifact shares one look.
+[theme]
+primaryColor = "#2E75B6"
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#F4F7FB"
+textColor = "#222222"
+
+[server]
+headless = true
