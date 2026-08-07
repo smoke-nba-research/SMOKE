@@ -103,9 +103,10 @@ and **Germain Meza** (data engineering). The work here extends that foundation.
 
 ## License
 
-Code and derived outputs in this repository are MIT licensed (see LICENSE). The license
-covers this repository's contents only, not the underlying NBA data, which is obtained
-from the public sources listed in `data/README.md`.
+Code and derived outputs in this repository are MIT licensed (see [LICENSE](LICENSE)). The
+license covers this repository's contents only, not the underlying NBA data, which is not
+redistributed here and is obtained from the public sources listed in
+[data/README.md](data/README.md). See [NOTICE](NOTICE) for the full scope statement.
 
 ## Disclaimer
 

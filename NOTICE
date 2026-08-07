@@ -1,0 +1,13 @@
+SMOKE - Notice
+
+Copyright (c) 2026 Cole Campbell
+
+The MIT license in LICENSE applies to the code and derived outputs in this
+repository. It does not grant any rights to the underlying NBA data, which is
+not redistributed here and is obtained separately from the public sources
+documented in data/README.md. Anyone using that data is responsible for the
+terms attached to it at its source.
+
+SMOKE is an independent analysis of publicly available NBA data. It is not
+affiliated with, authorized by, or endorsed by the National Basketball
+Association or any of its teams.
