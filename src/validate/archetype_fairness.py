@@ -6,11 +6,20 @@ them to make, so "beating expectation" is nearly impossible, and they'd look bad
 fault of their own. If true, that's a fairness problem a team must know about before using
 SMOKE to judge a center.
 
-Test: cluster ALL qualified players (not just the overperformers — that would be circular)
-into the capstone's four shot-selection archetypes, then ask whether any archetype's mean
-SMOKE is systematically below zero. Because SMOKE is a residual, the league mean is ~0 by
-construction; the question is whether it's ~0 *within each role* or whether one role carries
-a structural penalty.
+What this test can and cannot show
+----------------------------------
+The archetypes are K-means clusters on player averages of the model's own inputs (shot
+distance, defender distance, touch time, dribbles, three-point rate). A well-calibrated
+model has near-zero mean residual within strata of its own features, so a near-zero mean
+SMOKE per archetype is partly a *calibration* property, not an independent discovery; a
+mean that does differ from zero is evidence of miscalibration in that region. The
+fairness question proper is about *precision*: whether one role's players can be measured
+at all. That is the separability rate by archetype, reported last, and it is the number
+that answers the capstone's worry.
+
+Two versions of the per-archetype mean are reported: the inverse-variance-weighted mean
+of the raw rates (each player weighted by the precision of his own bootstrap estimate,
+the appropriate test) and the plain mean of the shrunk rates (what the leaderboard shows).
 
 Run:
     .venv/Scripts/python.exe -m src.validate.archetype_fairness
@@ -23,137 +32,100 @@ import sys
 import numpy as np
 import pandas as pd
 from scipy import stats
-from sklearn.cluster import KMeans
-from sklearn.preprocessing import StandardScaler
 
-from src.features.kaggle_shot_quality import (
-    PLAYER_NAME_COLUMN,
-    TARGET_COLUMN,
-    add_derived_features,
-    load_kaggle_shot_logs,
-)
+from src.features.archetypes import ARCHETYPE_ORDER, build_player_style, cluster_archetypes
+from src.features.kaggle_shot_quality import PLAYER_ID_COLUMN
+from src.models.build_model_outputs import PLAYER_MIN_SHOTS, load_scored_shots
 from src.pulls._paths import REPO_ROOT
-from src.validate.convergent import norm_name
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 VAL_DIR = REPO_ROOT / "data" / "v2" / "validation"
 SMOKE_CSV = VAL_DIR / "player_smoke_with_error_bars.csv"
-MIN_SHOTS = 150
-FEATURES = ["avg_shot_dist", "avg_def_dist", "avg_touch_time", "avg_dribbles", "three_rate"]
+MIN_SHOTS = PLAYER_MIN_SHOTS
 
 
-def player_profiles() -> pd.DataFrame:
-    """Per-player shot-selection profile for all players ≥ MIN_SHOTS (2014-15)."""
-    s = add_derived_features(load_kaggle_shot_logs())
-    s = s.dropna(subset=["SHOT_RESULT", PLAYER_NAME_COLUMN]).copy()
-    s["is_three"] = (s["PTS_TYPE"] == 3).astype(int)
-    prof = (
-        s.groupby(PLAYER_NAME_COLUMN)
-        .agg(
-            shots=(TARGET_COLUMN, "size"),
-            avg_shot_dist=("SHOT_DIST", "mean"),
-            avg_def_dist=("CLOSE_DEF_DIST", "mean"),
-            avg_touch_time=("TOUCH_TIME", "mean"),
-            avg_dribbles=("DRIBBLES", "mean"),
-            three_rate=("is_three", "mean"),
-        )
-        .reset_index()
-    )
-    return prof[prof["shots"] >= MIN_SHOTS].reset_index(drop=True)
-
-
-def label_clusters(prof: pd.DataFrame) -> pd.DataFrame:
-    """K-means (k=4) on shot-selection features, then name clusters by their defining trait."""
-    X = StandardScaler().fit_transform(prof[FEATURES])
-    prof = prof.copy()
-    prof["cluster"] = KMeans(n_clusters=4, random_state=42, n_init=10).fit_predict(X)
-    cent = prof.groupby("cluster")[FEATURES].mean()
-
-    labels: dict[int, str] = {}
-    remaining = set(cent.index)
-
-    def assign(cluster_id: int, name: str) -> None:
-        labels[cluster_id] = name
-        remaining.discard(cluster_id)
-
-    # interior finishers = shortest average distance
-    assign(cent.loc[list(remaining), "avg_shot_dist"].idxmin(), "Interior Finishers")
-    # on-ball creators = most dribbles among the rest
-    assign(cent.loc[list(remaining), "avg_dribbles"].idxmax(), "On-Ball Creators")
-    # catch-and-shoot = highest three-rate among the rest
-    assign(cent.loc[list(remaining), "three_rate"].idxmax(), "Catch-and-Shoot")
-    # the last one = mid-range scorers
-    labels[remaining.pop()] = "Mid-Range Scorers"
-
-    prof["archetype"] = prof["cluster"].map(labels)
-    return prof
+def weighted_mean_test(rate: np.ndarray, se: np.ndarray) -> tuple[float, float, float]:
+    """Inverse-variance-weighted mean of raw rates, its SE, and a two-sided p versus zero."""
+    w = 1.0 / se**2
+    mean = float(np.sum(w * rate) / np.sum(w))
+    se_mean = float(np.sqrt(1.0 / np.sum(w)))
+    p = float(2 * stats.norm.sf(abs(mean / se_mean)))
+    return mean, se_mean, p
 
 
 def main() -> None:
-    prof = label_clusters(player_profiles())
-    prof["key"] = prof[PLAYER_NAME_COLUMN].map(norm_name)
+    shots = load_scored_shots()
+    prof = cluster_archetypes(build_player_style(shots, min_shots=MIN_SHOTS))
 
     smoke = pd.read_csv(SMOKE_CSV)
-    smoke["key"] = smoke["player"].map(norm_name)
-    col = "smoke_rate_shrunk" if "smoke_rate_shrunk" in smoke.columns else "smoke_rate"
-    df = prof.merge(smoke[["key", col, "distinguishable"]], on="key", how="inner").rename(
-        columns={col: "smoke"}
+    df = prof.merge(
+        smoke[[PLAYER_ID_COLUMN, "smoke_rate", "smoke_rate_se", "smoke_rate_shrunk", "distinguishable"]],
+        on=PLAYER_ID_COLUMN, how="inner",
     )
+    assert len(df) == len(prof) == len(smoke), "archetype and SMOKE tables must cover the same players"
 
     print("=" * 80)
     print("PHASE 2.8 — archetype fairness: is any role systematically penalized? (2014-15)")
     print("=" * 80)
-    print(f"  players clustered: {len(df)}  |  league mean SMOKE: {df['smoke'].mean():+.4f} (≈0 by construction)")
+    print(f"  players clustered: {len(df)}  |  league mean shrunk SMOKE: {df['smoke_rate_shrunk'].mean():+.4f} (≈0 by construction)")
 
-    print("\n  MEAN SMOKE BY ARCHETYPE  (the fairness table — want all near 0, none buried)")
-    print("  " + "-" * 74)
-    print(f"  {'archetype':22s} {'n':>4} {'mean SMOKE':>12} {'95% CI of mean':>20} {'p vs 0':>8}")
-    print("  " + "-" * 74)
-    order = ["On-Ball Creators", "Catch-and-Shoot", "Mid-Range Scorers", "Interior Finishers"]
+    print("\n  MEAN SMOKE BY ARCHETYPE")
+    print("  " + "-" * 96)
+    print(f"  {'archetype':20s} {'n':>4} {'weighted raw':>13} {'SE':>7} {'p vs 0':>8}   {'mean shrunk':>12} {'95% CI (shrunk)':>20} {'p':>7}")
+    print("  " + "-" * 96)
     rows = []
-    for arch in order:
-        g = df[df["archetype"] == arch]["smoke"]
+    for arch in ARCHETYPE_ORDER:
+        g = df[df["archetype"] == arch]
         if len(g) < 2:
             continue
-        m = g.mean()
-        se = g.std(ddof=1) / np.sqrt(len(g))
-        ci = stats.t.interval(0.95, len(g) - 1, loc=m, scale=se)
-        p = stats.ttest_1samp(g, 0.0).pvalue
-        flag = "  ← ≠0" if p < 0.05 else ""
-        print(f"  {arch:22s} {len(g):>4} {m:>+12.4f}  [{ci[0]:+.4f}, {ci[1]:+.4f}]  {p:>7.3f}{flag}")
-        rows.append({"archetype": arch, "n": len(g), "mean_smoke": round(m, 4),
-                     "ci_lo": round(ci[0], 4), "ci_hi": round(ci[1], 4), "p_vs_0": round(p, 4)})
-    print("  " + "-" * 74)
+        wmean, wse, wp = weighted_mean_test(g["smoke_rate"].to_numpy(), g["smoke_rate_se"].to_numpy())
+        sh = g["smoke_rate_shrunk"]
+        m, se = sh.mean(), sh.std(ddof=1) / np.sqrt(len(sh))
+        ci = stats.t.interval(0.95, len(sh) - 1, loc=m, scale=se)
+        p = stats.ttest_1samp(sh, 0.0).pvalue
+        flag = "  ← ≠0" if wp < 0.05 else ""
+        print(f"  {arch:20s} {len(g):>4} {wmean:>+13.4f} {wse:>7.4f} {wp:>8.3f}   {m:>+12.4f}  [{ci[0]:+.4f}, {ci[1]:+.4f}] {p:>7.3f}{flag}")
+        rows.append(
+            {
+                "archetype": arch, "n": len(g),
+                "weighted_mean_raw": round(wmean, 4), "weighted_se": round(wse, 4), "p_weighted_vs_0": round(wp, 4),
+                "mean_shrunk": round(m, 4), "ci_lo_shrunk": round(ci[0], 4), "ci_hi_shrunk": round(ci[1], 4), "p_shrunk_vs_0": round(p, 4),
+                "separable_share": round(float(g["distinguishable"].mean()), 4),
+                "mean_shot_dist_ft": round(float(g["avg_shot_dist"].mean()), 1),
+            }
+        )
+    print("  " + "-" * 96)
 
-    # do archetypes differ from each other at all?
-    groups = [df[df["archetype"] == a]["smoke"].to_numpy() for a in order if (df["archetype"] == a).any()]
+    groups = [df[df["archetype"] == a]["smoke_rate_shrunk"].to_numpy() for a in ARCHETYPE_ORDER if (df["archetype"] == a).any()]
     kw = stats.kruskal(*groups)
-    print(f"\n  Kruskal-Wallis across archetypes: H = {kw.statistic:.2f}, p = {kw.pvalue:.3f}")
+    print(f"\n  Kruskal-Wallis across archetypes (shrunk): H = {kw.statistic:.2f}, p = {kw.pvalue:.3f}")
     print(f"    → archetypes {'DO' if kw.pvalue < 0.05 else 'do NOT'} differ in mean SMOKE.")
 
-    # the specific worry: are interior finishers buried?
-    interior = df[df["archetype"] == "Interior Finishers"]["smoke"]
-    print(f"\n  THE KEY CHECK — Interior Finishers (n={len(interior)}): mean SMOKE {interior.mean():+.4f}")
-    if stats.ttest_1samp(interior, 0.0).pvalue >= 0.05:
+    interior = df[df["archetype"] == "Interior Finishers"]
+    wmean, wse, wp = weighted_mean_test(interior["smoke_rate"].to_numpy(), interior["smoke_rate_se"].to_numpy())
+    print(f"\n  THE KEY CHECK — Interior Finishers (n={len(interior)}): weighted mean SMOKE {wmean:+.4f} (p = {wp:.3f})")
+    if wp >= 0.05:
         print("    → NOT significantly different from 0. The metric does not structurally bury big men.")
     else:
-        sign = "below" if interior.mean() < 0 else "above"
+        sign = "below" if wmean < 0 else "above"
         print(f"    → significantly {sign} 0 — investigate whether this reflects real performance or bias.")
 
-    # how many players of each archetype are even distinguishable from average?
-    print("\n  distinguishable-from-average rate by archetype (context from 2.1):")
-    for arch in order:
-        g = df[df["archetype"] == arch]
-        if len(g):
-            print(f"    {arch:22s} {g['distinguishable'].mean():.0%} distinguishable  (mean shot dist "
-                  f"{prof[prof['archetype'] == arch]['avg_shot_dist'].mean():.1f} ft)")
+    print("\n  SEPARABILITY BY ARCHETYPE (the fairness statistic: can this role's players be measured at all?)")
+    for r in rows:
+        print(f"    {r['archetype']:20s} {r['separable_share']:.0%} distinguishable from average  (mean shot dist {r['mean_shot_dist_ft']} ft)")
 
-    df.sort_values("smoke", ascending=False).to_csv(VAL_DIR / "archetype_fairness.csv", index=False)
-    pd.DataFrame(rows).to_csv(VAL_DIR / "archetype_means.csv", index=False)
+    df.sort_values("smoke_rate_shrunk", ascending=False).to_csv(VAL_DIR / "archetype_fairness.csv", index=False)
+    means = pd.DataFrame(rows)
+    means.attrs = {}
+    means.to_csv(VAL_DIR / "archetype_means.csv", index=False)
+    pd.DataFrame([{"stat": "kruskal_H", "value": round(float(kw.statistic), 3)}, {"stat": "kruskal_p", "value": round(float(kw.pvalue), 4)}]).to_csv(
+        VAL_DIR / "archetype_omnibus.csv", index=False
+    )
     print(f"\n  wrote {VAL_DIR / 'archetype_fairness.csv'}  ({len(df)} players)")
     print(f"  wrote {VAL_DIR / 'archetype_means.csv'}")
+    print(f"  wrote {VAL_DIR / 'archetype_omnibus.csv'}")
 
 
 if __name__ == "__main__":

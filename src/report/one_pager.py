@@ -10,51 +10,20 @@ Run:
 
 from __future__ import annotations
 
-import matplotlib
+from pathlib import Path
 
-matplotlib.use("Agg")
 import fitz
-import matplotlib.pyplot as plt
 import pandas as pd
 
+from src.models.build_model_outputs import load_scored_shots
 from src.pulls._paths import REPO_ROOT
+from src.report import figures
 from src.report.figures import nm as name  # one name formatter for every artifact
 
 OUT_DIR = REPO_ROOT / "artifacts"
-CHART = OUT_DIR / "movers_chart.png"
+VAL = REPO_ROOT / "data" / "v2" / "validation"
+CHART = OUT_DIR / "one_pager_movers.png"
 PDF = OUT_DIR / "SMOKE_one_pager.pdf"
-
-NAVY = "#1F3864"
-BLUE = "#2E75B6"
-GRAY = "#6B7280"
-
-
-def build_chart(n: int = 6) -> None:
-    """Diverging bar chart: biggest rank movers, FG% rank versus SMOKE rank."""
-    r = pd.read_csv(REPO_ROOT / "data" / "model_outputs" / "rank_table.csv")
-    up = r.nlargest(n, "rank_shift_vs_fg")
-    down = r.nsmallest(n, "rank_shift_vs_fg").iloc[::-1]
-    rows = pd.concat([down, up])
-    labels = [name(p) for p in rows["player_name"]]
-    vals = rows["rank_shift_vs_fg"].to_numpy()
-    colors = [BLUE if v > 0 else GRAY for v in vals]
-
-    fig, ax = plt.subplots(figsize=(7.4, 3.4), dpi=200)
-    ax.barh(labels, vals, color=colors, height=0.62)
-    ax.axvline(0, color=NAVY, linewidth=0.8)
-    ax.set_xlabel("Ranking spots moved, raw FG% rank to SMOKE rank", fontsize=9, color=NAVY)
-    ax.tick_params(labelsize=8.5)
-    for spine in ["top", "right", "left"]:
-        ax.spines[spine].set_visible(False)
-    ax.spines["bottom"].set_color(GRAY)
-    ax.set_title(
-        "The same players, ranked by raw FG% and then by SMOKE",
-        fontsize=10.5, color=NAVY, loc="left", pad=8,
-    )
-    fig.tight_layout()
-    OUT_DIR.mkdir(exist_ok=True)
-    fig.savefig(CHART, bbox_inches="tight")
-    plt.close(fig)
 
 
 # ---------------------------------------------------------------- pdf assembly
@@ -62,12 +31,21 @@ PW, PH = 612, 792
 ML, MR = 54, 54
 CW = PW - ML - MR
 
+# Windows font paths, tried first; each falls back to a PyMuPDF base-14 font (no
+# file needed) so the script also runs on macOS/Linux.
 FF = {
     "reg": "C:/Windows/Fonts/times.ttf",
     "bold": "C:/Windows/Fonts/timesbd.ttf",
     "ital": "C:/Windows/Fonts/timesi.ttf",
     "sans": "C:/Windows/Fonts/arial.ttf",
     "sansb": "C:/Windows/Fonts/arialbd.ttf",
+}
+BASE14 = {
+    "reg": "Times-Roman",
+    "bold": "Times-Bold",
+    "ital": "Times-Italic",
+    "sans": "Helvetica",
+    "sansb": "Helvetica-Bold",
 }
 LABEL = {k: f"F{k}" for k in FF}
 
@@ -77,15 +55,58 @@ DARK = (0.13, 0.13, 0.13)
 GRAY_RGB = (0.42, 0.42, 0.42)
 
 
+def load_numbers() -> dict:
+    """Every prose number in the one-pager, read from the validation outputs."""
+    players = pd.read_csv(VAL / "player_smoke_with_error_bars.csv")
+    top = players.loc[players["smoke_total_shrunk"].idxmax()]
+
+    n_shots = len(load_scored_shots())
+
+    stability = pd.read_csv(VAL / "stability_correlations.csv")
+    stability = stability[stability["design"] == "per-season cross-fit"]
+    r_smoke = float(stability.loc[stability["metric"] == "SMOKE", "pearson_r"].iloc[0])
+    r_efg = float(stability.loc[stability["metric"] == "eFG%", "pearson_r"].iloc[0])
+
+    predictive = pd.read_csv(VAL / "predictive_summary.csv").set_index("test")["value"]
+    smoke_pred = float(predictive["c_corr_smoke_vs_futureSMOKE"])
+    efg_pred = float(predictive["c_corr_pastEFG_vs_futureSMOKE"])
+
+    confound = pd.read_csv(VAL / "confound_summary.csv").set_index("stat")["value"]
+    r2_context = float(confound["r2_context"])
+    spearman_before_after = float(confound["spearman_before_after"])
+
+    return {
+        "top_name": name(top["player"]),
+        "top_raw": float(top["smoke_total"]),
+        "top_lo": float(top["smoke_total_lo"]),
+        "top_hi": float(top["smoke_total_hi"]),
+        "n_shots": n_shots,
+        "r_smoke": r_smoke,
+        "r_efg": r_efg,
+        "smoke_pred": smoke_pred,
+        "efg_pred": efg_pred,
+        "r2_context": r2_context,
+        "spearman_before_after": spearman_before_after,
+    }
+
+
 def build_pdf() -> None:
+    n = load_numbers()
+
     doc = fitz.open()
     page = doc.new_page(width=PW, height=PH)
+    font_name: dict[str, str] = {}
+    font_file: dict[str, str | None] = {}
     for k, path in FF.items():
-        page.insert_font(fontname=LABEL[k], fontfile=path)
+        if Path(path).exists():
+            page.insert_font(fontname=LABEL[k], fontfile=path)
+            font_name[k], font_file[k] = LABEL[k], path
+        else:
+            font_name[k], font_file[k] = BASE14[k], None
 
     def tb(rect: fitz.Rect, text: str, style: str, size: float, color, lh: float = 1.3):
         return page.insert_textbox(
-            rect, text, fontname=LABEL[style], fontfile=FF[style],
+            rect, text, fontname=font_name[style], fontfile=font_file[style],
             fontsize=size, color=color, lineheight=lh,
         )
 
@@ -115,10 +136,11 @@ def build_pdf() -> None:
     y = block("What SMOKE measures", "sansb", 11.5, NAVY_RGB, y, gap=3)
     y = block(
         "A model estimates every shot's make probability from its difficulty: distance, "
-        "defender distance, shot clock, and touch time, across 128,069 tracked shots. "
+        f"defender distance, shot clock, and touch time, across {n['n_shots']:,} tracked shots. "
         "SMOKE is a player's actual makes minus the makes the model expected. It isolates "
-        "shot-making skill from shot selection. Chris Paul led 2014-15 at 53 makes above "
-        "expectation, with a confidence range of 25 to 83; his number is skill, not luck.",
+        f"shot-making skill from shot selection. {n['top_name']} led 2014-15 at {n['top_raw']:.0f} "
+        f"makes above expectation, with a confidence range of {n['top_lo']:.0f} to {n['top_hi']:.0f}; "
+        "his number is skill, not luck.",
         "reg", 11, DARK, y, gap=12,
     )
 
@@ -134,16 +156,19 @@ def build_pdf() -> None:
     )
 
     y = block("Why trust this number", "sansb", 11.5, NAVY_RGB, y, gap=4)
+    stability_word = "higher than" if n["r_smoke"] >= n["r_efg"] else "lower than"
+    predictive_word = "better than" if n["smoke_pred"] >= n["efg_pred"] else "about as well as"
     bullets = [
-        "It repeats. Year-over-year stability is 0.51, higher than effective field goal "
-        "percentage at 0.47, and it predicts next season's shot-making nearly twice as "
-        "well as efficiency does (0.51 versus 0.28).",
+        f"It repeats. Year-over-year stability is {n['r_smoke']:.2f}, {stability_word} effective "
+        f"field goal percentage at {n['r_efg']:.2f}, and it predicts next season's shot-making "
+        f"{predictive_word} efficiency does ({n['smoke_pred']:.2f} versus {n['efg_pred']:.2f}).",
         "It is honest about noise. Every player's value ships with a confidence interval "
         "and a reliability weight, and small samples are shrunk toward average. No "
         "competing shot-quality product publishes either.",
-        "It is fair and robust. No playing style is systematically penalized (interior "
-        "big men included), and controlling for opponent quality and venue leaves the "
-        "rankings essentially unchanged.",
+        "It is fair and robust. No playing style is structurally penalized (interior "
+        f"big men included). Opponent quality and venue explain just {n['r2_context']:.1%} of the "
+        "variance in SMOKE, and rankings before and after controlling for them correlate at "
+        f"a Spearman correlation of {n['spearman_before_after']:.3f}.",
     ]
     for b in bullets:
         rect = fitz.Rect(ML + 14, y, ML + CW, PH - 40)
@@ -168,7 +193,10 @@ def build_pdf() -> None:
 
 
 def main() -> None:
-    build_chart()
+    figures.fig_movers(
+        n=6, filename="one_pager_movers.png",
+        title="The same players, ranked by raw FG% and then by SMOKE",
+    )
     build_pdf()
 
 

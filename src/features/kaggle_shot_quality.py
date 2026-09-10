@@ -1,7 +1,24 @@
-"""Reusable helpers for the Kaggle 2014-15 shot-quality models.
+"""Feature construction for the 2014-15 Kaggle shot logs.
 
-The point of this module is to keep the modeling notebook focused on
-analysis instead of repeating the same cleanup and feature logic.
+Everything the expected-make model sees is defined here, in one place, so the paper's
+feature list and the code cannot drift apart.
+
+Feature policy
+--------------
+Only quantities knowable at the moment of release enter the model. The Kaggle file
+also carries FINAL_MARGIN and W (the game's final score margin and result); those are
+outcomes shared by every shot a team takes that night, and the v1 capstone model used
+them. They were removed on 2026-09-09: alone they reach a hold-out AUC of 0.53, and
+they raised expectations for players on winning teams, which is not shot difficulty.
+
+Data corrections applied before modeling
+----------------------------------------
+* SHOT_CLOCK is missing on 5,567 shots; 3,554 of them have 24 s or less on the game
+  clock, where the shot clock is switched off and the game clock is the shot clock.
+  Those are filled with the game clock and flagged (SHOT_CLOCK_OFF); the remaining
+  gaps are left for median imputation inside the model pipeline.
+* TOUCH_TIME is negative on 312 rows (a known artifact of this dataset, minimum
+  -163.6 s). Negative values are set to missing rather than fed to the model.
 """
 
 from __future__ import annotations
@@ -20,10 +37,13 @@ KAGGLE_SHOT_LOG = (
 
 TARGET_COLUMN = "SHOT_MADE"
 PLAYER_NAME_COLUMN = "player_name"
+PLAYER_ID_COLUMN = "player_id"
 TEAM_COLUMN = "SHOOTING_TEAM"
+OPPONENT_COLUMN = "OPP_TEAM"
+DATE_COLUMN = "GAME_DATE"
 
+# Shot difficulty and in-game context, all known at release.
 NUMERIC_FEATURES = [
-    "FINAL_MARGIN",
     "SHOT_NUMBER",
     "PERIOD",
     "SHOT_CLOCK",
@@ -36,18 +56,29 @@ NUMERIC_FEATURES = [
 
 CATEGORICAL_FEATURES = [
     "LOCATION",
-    "W",
     "PTS_TYPE",
     "SHOT_DIST_ZONE",
     "TOUCH_TIME_BUCKET",
     "LATE_CLOCK",
+    "SHOT_CLOCK_OFF",
 ]
 
 MODEL_COLUMNS = NUMERIC_FEATURES + CATEGORICAL_FEATURES
 
+# Columns from the source file that describe the game's outcome, never features.
+OUTCOME_COLUMNS = ["FINAL_MARGIN", "W"]
+
+# The Kaggle MATCHUP string is written from the shooter's perspective: the first
+# abbreviation is always the shooter's team, whether the game reads "CHA @ BKN"
+# (away) or "CHA vs. LAL" (home). The second is always the opponent. LOCATION is
+# not needed to tell the two apart.
 MATCHUP_PATTERN = re.compile(
     r"\w{3} \d{2}, \d{4} - ([A-Z]{2,3}) (?:@|vs\.) ([A-Z]{2,3})"
 )
+MATCHUP_DATE_PATTERN = re.compile(r"^(\w{3} \d{2}, \d{4})")
+
+# the shot clock is off, and the game clock governs, at or under this many seconds
+SHOT_CLOCK_LENGTH_S = 24.0
 
 
 def load_kaggle_shot_logs(csv_path: Path | None = None) -> pd.DataFrame:
@@ -65,21 +96,33 @@ def game_clock_to_seconds(clock_value: str) -> float:
     return int(minutes) * 60 + int(seconds)
 
 
-def extract_shooting_team(matchup: str, location: str) -> str | None:
-    """Recover the shooting team abbreviation from the matchup string.
-
-    Kaggle stores the matchup as text like ``CHA @ BKN`` or ``CHA vs. LAL``.
-    We use the home/away flag to back out which team took the shot.
-    """
-    if pd.isna(matchup) or pd.isna(location):
+def parse_matchup(matchup: str) -> tuple[str, str] | None:
+    """Return ``(shooting team, opponent)`` from a Kaggle MATCHUP string."""
+    if pd.isna(matchup):
         return None
-
     match = MATCHUP_PATTERN.search(str(matchup))
     if not match:
         return None
+    return match.group(1), match.group(2)
 
-    away_team, home_team = match.groups()
-    return home_team if location == "H" else away_team
+
+def extract_shooting_team(matchup: str) -> str | None:
+    """The team that took the shot: the first abbreviation in the matchup string."""
+    parsed = parse_matchup(matchup)
+    return parsed[0] if parsed else None
+
+
+def extract_opponent_team(matchup: str) -> str | None:
+    """The team defending the shot: the second abbreviation in the matchup string."""
+    parsed = parse_matchup(matchup)
+    return parsed[1] if parsed else None
+
+
+def fill_shot_clock(shot_clock: pd.Series, game_clock_seconds: pd.Series) -> tuple[pd.Series, pd.Series]:
+    """Apply the end-of-period rule. Returns (filled shot clock, shot-clock-off flag)."""
+    off = shot_clock.isna() & (game_clock_seconds <= SHOT_CLOCK_LENGTH_S)
+    filled = shot_clock.where(~off, game_clock_seconds)
+    return filled, off
 
 
 def add_derived_features(shots: pd.DataFrame) -> pd.DataFrame:
@@ -88,12 +131,18 @@ def add_derived_features(shots: pd.DataFrame) -> pd.DataFrame:
 
     enriched["GAME_CLOCK_SECONDS"] = enriched["GAME_CLOCK"].map(game_clock_to_seconds)
     enriched[TARGET_COLUMN] = (enriched["SHOT_RESULT"] == "made").astype(int)
-    enriched[TEAM_COLUMN] = [
-        extract_shooting_team(matchup, location)
-        for matchup, location in zip(
-            enriched["MATCHUP"], enriched["LOCATION"], strict=False
-        )
-    ]
+    teams = enriched["MATCHUP"].str.extract(MATCHUP_PATTERN)
+    enriched[TEAM_COLUMN] = teams[0]
+    enriched[OPPONENT_COLUMN] = teams[1]
+    enriched[DATE_COLUMN] = pd.to_datetime(
+        enriched["MATCHUP"].str.extract(MATCHUP_DATE_PATTERN)[0], format="%b %d, %Y"
+    )
+
+    enriched["SHOT_CLOCK"], off = fill_shot_clock(
+        enriched["SHOT_CLOCK"], enriched["GAME_CLOCK_SECONDS"]
+    )
+    enriched["SHOT_CLOCK_OFF"] = np.where(off, "clock_off", "clock_on")
+    enriched["TOUCH_TIME"] = enriched["TOUCH_TIME"].where(enriched["TOUCH_TIME"] >= 0)
 
     # A few human-readable buckets make the residual analysis easier to explain.
     enriched["SHOT_DIST_ZONE"] = pd.cut(
@@ -109,18 +158,14 @@ def add_derived_features(shots: pd.DataFrame) -> pd.DataFrame:
     ).astype("object")
 
     enriched["LATE_CLOCK"] = np.where(
-        enriched["SHOT_CLOCK"].fillna(24) <= 4, "late_clock", "normal_clock"
+        enriched["SHOT_CLOCK"].fillna(SHOT_CLOCK_LENGTH_S) <= 4, "late_clock", "normal_clock"
     )
 
     return enriched
 
 
 def build_modeling_frame(shots: pd.DataFrame) -> pd.DataFrame:
-    """Return the feature-ready table used by the notebook models.
-
-    We keep the row filter intentionally light so the sample stays above
-    the course's 100K observation floor.
-    """
+    """Return the feature-ready table used by the models."""
     modeling_frame = add_derived_features(shots)
     modeling_frame = modeling_frame.dropna(subset=["SHOT_RESULT", PLAYER_NAME_COLUMN])
     return modeling_frame
@@ -128,32 +173,32 @@ def build_modeling_frame(shots: pd.DataFrame) -> pd.DataFrame:
 
 def build_residual_table(
     scored_shots: pd.DataFrame,
-    group_column: str,
+    group_columns: str | list[str],
     min_shots: int,
+    expected_column: str = "expected",
 ) -> pd.DataFrame:
-    """Aggregate actual vs expected shooting results for players or teams."""
+    """Aggregate actual versus expected makes for players or teams.
+
+    ``smoke_total`` is makes above expectation and ``smoke_rate`` is field goal
+    percentage above expectation; both are the raw (unshrunk) quantities.
+    """
+    keys = [group_columns] if isinstance(group_columns, str) else list(group_columns)
     summary = (
-        scored_shots.groupby(group_column, dropna=False)
+        scored_shots.groupby(keys, dropna=False)
         .agg(
             shots=(TARGET_COLUMN, "size"),
             actual_makes=(TARGET_COLUMN, "sum"),
-            expected_makes=("EXPECTED_MAKE_PROB", "sum"),
+            expected_makes=(expected_column, "sum"),
             actual_fg_pct=(TARGET_COLUMN, "mean"),
-            expected_fg_pct=("EXPECTED_MAKE_PROB", "mean"),
+            expected_fg_pct=(expected_column, "mean"),
         )
         .reset_index()
     )
 
     # Small samples can jump around a lot, so trim them before ranking.
     summary = summary[summary["shots"] >= min_shots].copy()
-    summary["makes_above_expected"] = (
-        summary["actual_makes"] - summary["expected_makes"]
-    )
-    summary["fg_pct_above_expected"] = (
-        summary["actual_fg_pct"] - summary["expected_fg_pct"]
-    )
-    summary = summary.sort_values("makes_above_expected", ascending=False).reset_index(
-        drop=True
-    )
+    summary["smoke_total"] = summary["actual_makes"] - summary["expected_makes"]
+    summary["smoke_rate"] = summary["actual_fg_pct"] - summary["expected_fg_pct"]
+    summary = summary.sort_values("smoke_total", ascending=False).reset_index(drop=True)
 
     return summary

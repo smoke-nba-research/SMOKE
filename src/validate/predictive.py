@@ -1,23 +1,28 @@
-"""Phase 2.6 — predictive validity: the money test.
+"""Phase 2.6 — predictive validity: does this season's SMOKE tell you anything about next season?
 
-The single strongest sentence the eventual paper can contain would be: "a player's
-shot-quality-adjusted shot-making this season tells you something about their shooting
-efficiency next season that this season's efficiency alone does not."
+Year N = 2014-15, year N+1 = 2015-16. Efficiency comes from the Basketball-Reference
+full-season totals (sumitrodatta); SMOKE_N is the published, shrunk 2014-15 value from
+reliability.py; SMOKE_N+1 is the 2015-16 value from the two-season stability panel
+(its own cross-fitted four-feature model, so the two sides are independently defined).
 
-Three regressions (year N = 2014-15, year N+1 = 2015-16 — the two seasons we have
-tracking-grounded SMOKE for; efficiency from the IP-safe sumitrodatta full-season totals):
+Three parts, and reporting all three is what makes the test credible.
 
-  (a) Does year-N SMOKE predict year-N+1 eFG% *better than* year-N eFG% does?
-      Honest expectation: probably NOT on its own — past eFG% carries persistent shot
-      *selection* too, which SMOKE deliberately strips out. Report it either way.
+  (a) Head to head on next-season efficiency. Does year-N SMOKE predict year-N+1 eFG%
+      better than year-N eFG% does? Honest expectation: no. Past eFG% carries persistent
+      shot *selection* too, which SMOKE deliberately strips out.
 
-  (b) THE key test — does SMOKE add predictive power *incrementally*, on top of eFG%?
-      OLS: eFG_{N+1} ~ eFG_N + SMOKE_N. A significant positive SMOKE coefficient means
-      SMOKE carries information about future shooting that past efficiency alone misses. This
-      is the defensible "money" claim.
+  (b) Decomposition. eFG%_N splits (up to the three-point bonus) into the difficulty of
+      the shots taken (expected FG%) and the shot-making above it (SMOKE). Regress
+      eFG%_N+1 on both parts. Each coefficient is the forward carry of that part.
+      The earlier specification eFG_N+1 ~ eFG_N + SMOKE_N is reported too, with a
+      warning: conditional on eFG_N, a higher SMOKE_N is exactly a lower expected FG%,
+      so its coefficient measures shot diet, not mean reversion.
 
-  (c) Contract value — deferred (exploratory, needs salary data not yet pulled; the free
-      Basketball-Reference/Spotrac web tables are enough when we come back to it).
+  (c) Incremental forecast of next-season shot-making, the quantity SMOKE measures:
+      SMOKE_N+1 ~ eFG_N + SMOKE_N. The SMOKE_N coefficient is the information about
+      future shot-making that past efficiency does not carry, and the simple
+      correlations of each predictor with SMOKE_N+1 are reported beside it. This
+      replaces an earlier version that correlated the stability panel with itself.
 
 Run:
     .venv/Scripts/python.exe -m src.validate.predictive
@@ -27,37 +32,38 @@ from __future__ import annotations
 
 import sys
 
+import numpy as np
 import pandas as pd
 from scipy import stats
 
+from src.features.kaggle_shot_quality import PLAYER_ID_COLUMN
+from src.models.build_model_outputs import OUTPUT_DIR
 from src.pulls._paths import REPO_ROOT
-from src.validate.convergent import norm_name  # shared name normalizer (100% match rate)
+from src.validate.convergent import one_row_per_player
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 VAL_DIR = REPO_ROOT / "data" / "v2" / "validation"
 SMOKE_CSV = VAL_DIR / "player_smoke_with_error_bars.csv"   # 2014-15, from reliability.py
+PANEL = VAL_DIR / "stability_2season_players.parquet"      # from stability.py
 TOTALS = REPO_ROOT / "data" / "raw" / "kaggle" / "historical_stats" / "Player Totals.csv"
 
 YEAR_N, YEAR_N1 = 2015, 2016     # 2014-15 → 2015-16
 MIN_FGA_N1 = 200                 # next-season volume floor so the outcome isn't noise
+SMOKE_COL = "smoke_rate_shrunk"
 
 
 def season_efg(totals: pd.DataFrame, season: int) -> pd.DataFrame:
-    """One eFG% per player for a season (most-minutes row if traded), keyed by norm name."""
-    s = totals[totals["season"] == season].copy()
-    s = s.sort_values("mp", ascending=False).drop_duplicates("player_id", keep="first")
-    s["key"] = s["player"].map(norm_name)
+    """One eFG% per player for a season, keyed by normalized name."""
+    s = one_row_per_player(totals, season)
     return s[["key", "player", "e_fg_percent", "fga", "mp"]].rename(
         columns={"e_fg_percent": "efg", "player": "player_name"}
     )
 
 
 def ols(y: pd.Series, X: pd.DataFrame) -> dict:
-    """Plain OLS with intercept via numpy; returns coefs, t-stats, p-values, R²."""
-    import numpy as np
-
+    """Plain OLS with intercept via numpy; returns coefs, t-stats, p-values, R², residuals."""
     Xd = X.to_numpy(dtype=float)
     Xd = np.column_stack([np.ones(len(Xd)), Xd])
     yv = y.to_numpy(dtype=float)
@@ -73,24 +79,30 @@ def ols(y: pd.Series, X: pd.DataFrame) -> dict:
     ss_tot = ((yv - yv.mean()) ** 2).sum()
     r2 = 1 - (resid @ resid) / ss_tot
     adj_r2 = 1 - (1 - r2) * (n - 1) / dof
-    names = ["intercept", *X.columns]
     return {
-        "names": names,
-        "beta": beta,
-        "se": se,
-        "t": tvals,
-        "p": pvals,
-        "r2": r2,
-        "adj_r2": adj_r2,
-        "n": n,
+        "names": ["intercept", *X.columns],
+        "beta": beta, "se": se, "t": tvals, "p": pvals,
+        "r2": r2, "adj_r2": adj_r2, "n": n, "resid": resid,
     }
 
 
+def show(fit: dict, label: str) -> None:
+    print(f"      {label}:  R² {fit['r2']:.3f}   adj R² {fit['adj_r2']:.3f}   n={fit['n']}")
+    for name, b, se, t, p in zip(fit["names"], fit["beta"], fit["se"], fit["t"], fit["p"], strict=True):
+        star = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
+        print(f"        {name:18s}  β={b:+.4f}  SE={se:.4f}  t={t:+.2f}  p={p:.4f} {star}")
+
+
 def main() -> None:
+    from src.features.names import norm_name
+
     smoke = pd.read_csv(SMOKE_CSV)
     smoke["key"] = smoke["player"].map(norm_name)
-    smoke_col = "smoke_rate_shrunk" if "smoke_rate_shrunk" in smoke.columns else "smoke_rate"
-    smoke = smoke[["key", "player", smoke_col]].rename(columns={smoke_col: "smoke_N"})
+    rank = pd.read_csv(OUTPUT_DIR / "rank_table.csv")[[PLAYER_ID_COLUMN, "expected_fg_pct"]]
+    smoke = smoke.merge(rank, on=PLAYER_ID_COLUMN, how="inner")
+    smoke = smoke[["key", PLAYER_ID_COLUMN, "player", SMOKE_COL, "expected_fg_pct"]].rename(
+        columns={SMOKE_COL: "smoke_N", "expected_fg_pct": "expected_fg_N"}
+    )
 
     totals = pd.read_csv(TOTALS)
     efg_n = season_efg(totals, YEAR_N).rename(columns={"efg": "efg_N", "fga": "fga_N"})
@@ -114,63 +126,60 @@ def main() -> None:
     print("\n  [a] single-predictor correlation with next-season eFG%:")
     print(f"        SMOKE_N   → eFG_N+1 :  r = {r_smoke:+.3f}")
     print(f"        eFG_N     → eFG_N+1 :  r = {r_efg:+.3f}   (the baseline to beat)")
-    if r_smoke > r_efg:
-        print("        → SMOKE alone predicts next-year efficiency better than past efficiency does.")
-    else:
-        print("        → past eFG% alone predicts better (expected — it also carries persistent")
-        print("          shot *selection*, which SMOKE deliberately strips out). The real test is [b].")
+    print("        → past eFG% predicts next-season eFG% better (expected: it carries persistent")
+    print("          shot *selection*, which SMOKE deliberately strips out).")
 
-    # (b) THE test: does SMOKE add incremental predictive power on top of eFG%?
-    base = ols(df["efg_N1"], df[["efg_N"]])
-    full = ols(df["efg_N1"], df[["efg_N", "smoke_N"]])
-    print("\n  [b] incremental value — OLS  eFG_N+1 ~ eFG_N + SMOKE_N:")
-    print("      model                         R²      adj R²")
-    print(f"      eFG_N only                    {base['r2']:.3f}   {base['adj_r2']:.3f}")
-    print(f"      eFG_N + SMOKE_N               {full['r2']:.3f}   {full['adj_r2']:.3f}")
-    print("\n      coefficients (full model):")
-    for name, b, se, t, p in zip(full["names"], full["beta"], full["se"], full["t"], full["p"], strict=True):
-        star = "***" if p < 0.001 else "**" if p < 0.01 else "*" if p < 0.05 else ""
-        print(f"        {name:12s}  β={b:+.4f}  SE={se:.4f}  t={t:+.2f}  p={p:.4f} {star}")
-    smoke_p = full["p"][full["names"].index("smoke_N")]
-    dr2 = full["adj_r2"] - base["adj_r2"]
-    print(f"\n      → SMOKE_N adds adj-R² of {dr2:+.3f}; its coefficient is "
-          f"{'SIGNIFICANT' if smoke_p < 0.05 else 'not significant'} (p={smoke_p:.4f}).")
-    if smoke_p < 0.05 and full["beta"][full["names"].index("smoke_N")] > 0:
-        print("      → SMOKE carries real information about FUTURE shooting that past efficiency misses.")
-        print("        This is the paper's money sentence.")
+    # (b) decomposition: what carries forward, the shot diet or the shot-making?
+    decomp = ols(df["efg_N1"], df[["expected_fg_N", "smoke_N"]])
+    legacy = ols(df["efg_N1"], df[["efg_N", "smoke_N"]])
+    print("\n  [b] decomposition — OLS  eFG_N+1 ~ expectedFG_N + SMOKE_N:")
+    show(decomp, "decomposition")
+    print("      (earlier specification, reported for transparency; conditional on eFG_N a higher")
+    print("       SMOKE_N is a lower expected FG%, so this coefficient measures shot diet, not reversion)")
+    show(legacy, "eFG_N+1 ~ eFG_N + SMOKE_N")
 
-    # (b2) THE FAIR TEST — for a shot-making metric, the right target is future
-    # shot-MAKING, not future efficiency (which is half shot-selection SMOKE strips out).
-    # Uses both seasons' SMOKE from the 2.4 stability panel.
-    panel = pd.read_parquet(VAL_DIR / "stability_2season_players.parquet")
-    panel = panel.dropna(subset=["smoke_14", "smoke_16", "efg_pct_14"])
-    r_smoke_smoke = float(stats.pearsonr(panel["smoke_14"], panel["smoke_16"]).statistic)
-    r_efg_smoke = float(stats.pearsonr(panel["efg_pct_14"], panel["smoke_16"]).statistic)
-    print("\n  [b2] THE FAIR TEST — predicting next-season SHOT-MAKING (SMOKE_N+1),")
-    print("       the outcome a shot-making metric should actually forecast:")
-    print(f"        SMOKE_N   → SMOKE_N+1 :  r = {r_smoke_smoke:+.3f}")
-    print(f"        eFG_N     → SMOKE_N+1 :  r = {r_efg_smoke:+.3f}")
-    print(f"       (n = {len(panel)})")
-    if r_smoke_smoke > r_efg_smoke:
-        print("        → SMOKE forecasts future shot-making BETTER than efficiency does — the")
-        print("          honest 'money' claim: for the thing SMOKE measures, it out-predicts eFG%.")
+    # (c) the fair test: does SMOKE_N add information about NEXT-season shot-making
+    #     beyond past efficiency? SMOKE_N+1 comes from the independently fitted 2015-16 model.
+    panel = pd.read_parquet(PANEL)[[PLAYER_ID_COLUMN, "smoke_16", "shots_16"]]
+    dc = df.merge(panel, on=PLAYER_ID_COLUMN, how="inner").dropna(subset=["smoke_16"])
+    r_ss = float(stats.pearsonr(dc["smoke_N"], dc["smoke_16"]).statistic)
+    r_es = float(stats.pearsonr(dc["efg_N"], dc["smoke_16"]).statistic)
+    inc = ols(dc["smoke_16"], dc[["efg_N", "smoke_N"]])
+    base = ols(dc["smoke_16"], dc[["efg_N"]])
+    print("\n  [c] forecasting next-season SHOT-MAKING (SMOKE_N+1 from the 2015-16 model):")
+    print(f"        SMOKE_N   → SMOKE_N+1 :  r = {r_ss:+.3f}")
+    print(f"        eFG_N     → SMOKE_N+1 :  r = {r_es:+.3f}      (n = {len(dc)})")
+    show(base, "eFG_N only")
+    show(inc, "eFG_N + SMOKE_N")
+    dr2 = inc["adj_r2"] - base["adj_r2"]
+    p_inc = inc["p"][inc["names"].index("smoke_N")]
+    print(f"      → SMOKE_N adds adj-R² of {dr2:+.3f} on top of eFG_N; coefficient "
+          f"{'SIGNIFICANT' if p_inc < 0.05 else 'not significant'} (p={p_inc:.4f}).")
+    if p_inc < 0.05 and inc["beta"][inc["names"].index("smoke_N")] > 0:
+        print("      → SMOKE carries information about FUTURE shot-making that past efficiency misses.")
 
-    print("\n  [c] contract-value test — deferred (exploratory; needs salary data).")
-
-    out = df[["player", "smoke_N", "efg_N", "efg_N1", "fga_N1"]].copy()
+    out = df[["player", PLAYER_ID_COLUMN, "smoke_N", "expected_fg_N", "efg_N", "efg_N1", "fga_N1"]].copy()
     out.to_csv(VAL_DIR / "predictive_validity.csv", index=False)
-    pd.DataFrame(
-        [
-            {"test": "a_corr_smoke_vs_futureEFG", "value": round(r_smoke, 3)},
-            {"test": "a_corr_pastEFG_vs_futureEFG", "value": round(r_efg, 3)},
-            {"test": "b_adjR2_efg_only", "value": round(base["adj_r2"], 3)},
-            {"test": "b_adjR2_efg_plus_smoke", "value": round(full["adj_r2"], 3)},
-            {"test": "b_smoke_coef_pvalue", "value": round(smoke_p, 4)},
-            {"test": "b2_corr_smoke_vs_futureSMOKE", "value": round(r_smoke_smoke, 3)},
-            {"test": "b2_corr_pastEFG_vs_futureSMOKE", "value": round(r_efg_smoke, 3)},
-            {"test": "n_players", "value": len(df)},
-        ]
-    ).to_csv(VAL_DIR / "predictive_summary.csv", index=False)
+    rows = [
+        {"test": "a_corr_smoke_vs_futureEFG", "value": round(r_smoke, 3)},
+        {"test": "a_corr_pastEFG_vs_futureEFG", "value": round(r_efg, 3)},
+        {"test": "a_n_players", "value": len(df)},
+        {"test": "b_decomp_adjR2", "value": round(decomp["adj_r2"], 3)},
+        {"test": "b_decomp_beta_expectedFG", "value": round(decomp["beta"][1], 4)},
+        {"test": "b_decomp_p_expectedFG", "value": round(decomp["p"][1], 4)},
+        {"test": "b_decomp_beta_smoke", "value": round(decomp["beta"][2], 4)},
+        {"test": "b_decomp_p_smoke", "value": round(decomp["p"][2], 4)},
+        {"test": "b_legacy_beta_smoke", "value": round(legacy["beta"][2], 4)},
+        {"test": "b_legacy_p_smoke", "value": round(legacy["p"][2], 4)},
+        {"test": "c_corr_smoke_vs_futureSMOKE", "value": round(r_ss, 3)},
+        {"test": "c_corr_pastEFG_vs_futureSMOKE", "value": round(r_es, 3)},
+        {"test": "c_adjR2_efg_only", "value": round(base["adj_r2"], 3)},
+        {"test": "c_adjR2_efg_plus_smoke", "value": round(inc["adj_r2"], 3)},
+        {"test": "c_beta_smoke", "value": round(inc["beta"][2], 4)},
+        {"test": "c_p_smoke", "value": round(p_inc, 4)},
+        {"test": "c_n_players", "value": len(dc)},
+    ]
+    pd.DataFrame(rows).to_csv(VAL_DIR / "predictive_summary.csv", index=False)
     print(f"\n  wrote {VAL_DIR / 'predictive_validity.csv'}  ({len(out)} players)")
     print(f"  wrote {VAL_DIR / 'predictive_summary.csv'}")
 

@@ -19,16 +19,16 @@ player's shot diet tells you almost nothing about whether he beats it.
 
 | Test | Result |
 |---|---|
-| Stability, year over year | 0.51, above effective field goal percentage (0.47) |
-| Reliability, within season | 0.57 (split-half, Spearman-Brown corrected) |
-| Predicts next-season shot-making | 0.51, versus 0.28 for efficiency |
-| Convergent validity | Predicted ordering holds: true shooting 0.54 down to usage 0.19 |
-| Confound checks | Opponent quality and venue explain 2.2% of variance; rankings correlate 0.99 after controls |
-| Archetype fairness | No playing style penalized; interior big men are the best-measured group |
+| Stability, year over year | 0.48, above effective field goal percentage (0.43) |
+| Reliability, within season | 0.54 alternating shots, 0.63 first versus second half (split-half, Spearman-Brown corrected) |
+| Predicts next-season shot-making | 0.40, versus 0.31 for efficiency; adds information beyond efficiency (p < 0.001) |
+| Convergent validity | true shooting 0.62 down to usage 0.19 |
+| Confound checks | opponent quality and venue explain 0.6% of variance; rankings correlate 0.996 after controls |
+| Archetype fairness | no playing style structurally penalized (interior finishers p = 0.41); Interior Finishers are the best-measured group |
 
-Every published value ships with a confidence interval. Only 49 of 266 qualified players
-separate statistically from league average within a single season, and the leaderboard
-says which ones.
+Every published value ships with a confidence interval. Only 53 of
+266 qualified players separate statistically from league average within a single
+season, and the leaderboard says which ones.
 
 ![The leaderboard, with uncertainty shown](artifacts/fig3_leaderboard.png)
 
@@ -48,24 +48,30 @@ Common objections, answered with the supporting figure: [FAQ.md](FAQ.md).
 2. Place the source datasets. They are free and public but not redistributed here; see
    [data/README.md](data/README.md) for sources and expected paths.
 
-3. Run the validation scripts in order (later tests read what the first one writes):
+3. Build the model outputs, then the validation outputs, in order (later steps read
+   what earlier ones write):
 
    ```
+   python -m src.models.build_model_outputs
+   python -m src.pulls.build_tracking_season
+   # downloads the 2015-16 archive (~3.6 GB) and takes about two hours
    python -m src.validate.reliability
    python -m src.validate.stability
    python -m src.validate.convergent
    python -m src.validate.predictive
    python -m src.validate.confounds
    python -m src.validate.archetype_fairness
+   python -m src.report.figures
    ```
 
-Outputs land in `data/v2/validation/` and should match the figures in `VALIDATION.md`.
+   Outputs land in `data/v2/validation/` and should match the figures in `VALIDATION.md`;
+   the figure suite is rebuilt into `artifacts/`.
 
-To rebuild the figure suite in `artifacts/` from those outputs:
+4. Run the tests:
 
-```
-python -m src.report.figures
-```
+   ```
+   python -m pytest
+   ```
 
 ## What SMOKE sees that the box score does not
 
@@ -88,12 +94,7 @@ A fresh clone does not ship those files, because they are generated rather than 
 
 ## Limitations
 
-SMOKE measures shot-making only. It says nothing about defense, playmaking, or rebounding,
-and it is one input for evaluation rather than a verdict on a player. Public per-shot
-difficulty data exists for one full season (2014-15) and part of a second (2015-16); every
-load-bearing claim rests on the former. Most individual players are not statistically
-separable from average on a single season of data, which is why confidence intervals and
-shrinkage ship with every number.
+SMOKE measures shot-making only. It says nothing about defense, playmaking, or rebounding, and it is one input for evaluation rather than a verdict on a player. Public per-shot difficulty data covers 2014-15 (904 of 1,230 games, Oct 28 to Mar 4, 281 shooters) and part of 2015-16 (631 games, about half a season); every load-bearing claim rests on the former. The model's expectations are cross-fitted: each shot is scored by a model that never saw its game. Most individual players are not statistically separable from average on a single season of data, which is why confidence intervals and shrinkage ship with every number.
 
 ## Credit
 

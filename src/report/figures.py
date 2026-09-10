@@ -29,6 +29,9 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+from src.features.archetypes import ARCHETYPE_ORDER
+from src.features.names import display_name
+from src.models.build_model_outputs import load_scored_shots
 from src.pulls._paths import REPO_ROOT
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -44,47 +47,8 @@ LIGHT = "#9DC3E6"
 GRAY = "#6B7280"
 RED = "#B03A2E"
 
-# Names the source data spells wrong, or that no casing rule can derive.
-DISPLAY_FIX = {
-    "lebron james": "LeBron James",
-    "demarcus cousins": "DeMarcus Cousins",
-    "deandre jordan": "DeAndre Jordan",
-    "amare stoudemire": "Amar'e Stoudemire",
-    "dirk nowtizski": "Dirk Nowitzki",
-    "nikola vucevic": "Nikola Vucevic",
-    "dwayne wade": "Dwyane Wade",
-    "time hardaway jr": "Tim Hardaway Jr.",
-    "al farouq aminu": "Al-Farouq Aminu",
-    "kyle oquinn": "Kyle O'Quinn",
-    "zach lavine": "Zach LaVine",
-    "michael carter williams": "Michael Carter-Williams",
-    "karl anthony towns": "Karl-Anthony Towns",
-}
-
-INITIALS = {"cj", "dj", "jj", "kj", "oj", "pj", "tj", "aj", "rj", "jr"}
-SUFFIX = {"jr": "Jr.", "sr": "Sr.", "ii": "II", "iii": "III", "iv": "IV"}
-
-
-def _word(w: str, first: bool, last: bool) -> str:
-    """Case a single name token, handling initials, Mc/Mac, and suffixes."""
-    if last and not first and w in SUFFIX:
-        return SUFFIX[w]
-    if first and w in INITIALS:
-        return f"{w[0].upper()}.{w[1].upper()}."
-    if w.startswith("mc") and len(w) > 3:
-        return "Mc" + w[2:].capitalize()
-    return w.capitalize()
-
-
-def nm(raw: str) -> str:
-    """Render a lowercase source name for display."""
-    key = str(raw).strip().lower()
-    if key in DISPLAY_FIX:
-        return DISPLAY_FIX[key]
-    parts = key.split()
-    return " ".join(
-        _word(w, i == 0, i == len(parts) - 1) for i, w in enumerate(parts)
-    )
+# One name formatter for every artifact (figures, one-pager, dashboard).
+nm = display_name
 
 
 def style(ax, title: str = "", xlabel: str = "", ylabel: str = "") -> None:
@@ -111,21 +75,10 @@ def save(fig, name: str) -> None:
 
 
 def scored_shots() -> pd.DataFrame:
-    """Every 2014-15 shot with its expected-make probability and key features."""
-    from src.features.kaggle_shot_quality import (
-        MODEL_COLUMNS,
-        TARGET_COLUMN,
-        build_modeling_frame,
-        load_kaggle_shot_logs,
-    )
-    from src.models.build_model_outputs import build_boosted_model
-
-    shots = build_modeling_frame(load_kaggle_shot_logs())
-    model = build_boosted_model()
-    model.fit(shots[MODEL_COLUMNS], shots[TARGET_COLUMN])
-    out = shots[["CLOSE_DEF_DIST", "SHOT_DIST", TARGET_COLUMN]].copy()
-    out["expected"] = model.predict_proba(shots[MODEL_COLUMNS])[:, 1]
-    return out.rename(columns={TARGET_COLUMN: "made"})
+    """Every 2014-15 shot with its out-of-fold expected-make probability and key features."""
+    scored = load_scored_shots()
+    out = scored[["CLOSE_DEF_DIST", "SHOT_DIST", "SHOT_MADE", "expected"]].copy()
+    return out.rename(columns={"SHOT_MADE": "made"})
 
 
 # --------------------------------------------------------------- figure 1
@@ -144,17 +97,20 @@ def fig_model_works(shots: pd.DataFrame) -> None:
     ax1.legend(frameon=False, fontsize=8.5, loc="upper left")
 
     # Why a model is needed at all. Raw FG% by defender distance looks flat, because
-    # tight shots are mostly layups (5.9 ft average) and open shots are mostly threes
-    # (20.9 ft average, 59% of them threes). The two effects cancel. Hold shot distance
-    # fixed and the effect is large and monotone in every band.
-    defb = pd.cut(shots["CLOSE_DEF_DIST"], [0, 2, 4, 6, 100], labels=["0-2", "2-4", "4-6", "6+"])
+    # tight shots are mostly layups and open shots are mostly threes. The two effects
+    # cancel. Hold shot distance fixed and the effect is large and monotone in every band.
+    defb = pd.cut(
+        shots["CLOSE_DEF_DIST"], [0, 2, 4, 6, 100], labels=["0-2", "2-4", "4-6", "6+"],
+        include_lowest=True,
+    )
     distb = pd.cut(
         shots["SHOT_DIST"], [0, 4, 14, 23.75, 100],
         labels=["At the rim", "4-14 ft", "14 ft to arc", "3-pointers"],
+        include_lowest=True,
     )
+    tagged = shots.assign(defb=defb, distb=distb)
     grid = (
-        shots.assign(defb=defb, distb=distb)
-        .pivot_table(index="distb", columns="defb", values="made", aggfunc="mean", observed=True)
+        tagged.pivot_table(index="distb", columns="defb", values="made", aggfunc="mean", observed=True)
         * 100
     )
     band_colors = [NAVY, BLUE, "#5B9BD5", LIGHT]
@@ -172,10 +128,18 @@ def fig_model_works(shots: pd.DataFrame) -> None:
         "More space, higher percentage, at every shot distance",
         "Closest defender distance", "Field goal percentage",
     )
+    raw_by_def = tagged.groupby("defb", observed=True)["made"].mean() * 100
+    dist_by_def = tagged.groupby("defb", observed=True)["SHOT_DIST"].mean()
+    wide_open = tagged[tagged["defb"] == "6+"]
+    three_share_open = (wide_open["SHOT_DIST"] >= 23.75).mean() * 100
+    note = (
+        f"Raw FG% by defender distance looks flat ({raw_by_def['0-2']:.0f}%, {raw_by_def['2-4']:.0f}%, "
+        f"{raw_by_def['4-6']:.0f}%, {raw_by_def['6+']:.0f}%), because tight shots average\n"
+        f"{dist_by_def['0-2']:.1f} ft (mostly layups) and open shots average {dist_by_def['6+']:.1f} ft "
+        f"({three_share_open:.0f}% threes). That confound is why a model is necessary."
+    )
     ax2.text(
-        0.0, -0.30,
-        "Raw FG% by defender distance looks flat (45%, 47%, 43%, 45%), because tight shots are\n"
-        "mostly layups and open shots are mostly threes. That confound is why a model is necessary.",
+        0.0, -0.30, note,
         transform=ax2.transAxes, fontsize=7.8, color=GRAY, va="top",
     )
 
@@ -192,7 +156,7 @@ def fig_thesis() -> None:
     """Q: are shot selection and shot-making genuinely separable?"""
     r = pd.read_csv(V1 / "rank_table.csv")
     x = r["expected_fg_pct"] * 100          # how easy their shots were
-    y = r["shot_quality_adjusted"] * 100    # how much they beat that
+    y = r["smoke_rate"] * 100    # how much they beat that
 
     fig, ax = plt.subplots(figsize=(7.6, 5))
     ax.axhline(0, color=GRAY, lw=0.9)
@@ -209,7 +173,7 @@ def fig_thesis() -> None:
         row = r[r["player_name"] == raw]
         if row.empty:
             continue
-        px, py = row["expected_fg_pct"].iloc[0] * 100, row["shot_quality_adjusted"].iloc[0] * 100
+        px, py = row["expected_fg_pct"].iloc[0] * 100, row["smoke_rate"].iloc[0] * 100
         ax.scatter([px], [py], s=70, color=NAVY, zorder=5)
         ax.annotate(
             f"{nm(raw)}\n{note}",
@@ -238,6 +202,8 @@ def fig_thesis() -> None:
 def fig_leaderboard() -> None:
     """Q: who is good, and how confident are we in any single number?"""
     p = pd.read_csv(VAL / "player_smoke_with_error_bars.csv")
+    n_distinguishable = int(p["distinguishable"].sum())
+    n_total = len(p)
     top = p.nlargest(20, "smoke_total_shrunk").iloc[::-1]
 
     fig, ax = plt.subplots(figsize=(8.4, 6.4))
@@ -259,7 +225,8 @@ def fig_leaderboard() -> None:
     ax.text(
         0.0, -0.10,
         "Blue: the interval excludes zero, so the player is separable from league average. "
-        "Gray: not separable\non a single season. Only 49 of 266 qualified players clear that bar.",
+        "Gray: not separable\non a single season. Only "
+        f"{n_distinguishable} of {n_total} qualified players clear that bar.",
         transform=ax.transAxes, ha="left", va="top", fontsize=8.5, color=GRAY,
     )
     fig.tight_layout()
@@ -271,6 +238,7 @@ def fig_stability() -> None:
     """Q: is it repeatable across seasons?"""
     d = pd.read_parquet(VAL / "stability_2season_players.parquet")
     s = pd.read_csv(VAL / "stability_correlations.csv")
+    s = s[s["design"] == "per-season cross-fit"]  # primary design; robustness variant excluded
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.4, 4.2), gridspec_kw={"width_ratios": [1.25, 1]})
 
@@ -281,28 +249,33 @@ def fig_stability() -> None:
     m, b = np.polyfit(x, y, 1)
     xs = np.linspace(x.min(), x.max(), 50)
     ax1.plot(xs, m * xs + b, color=NAVY, lw=2)
-    r_smoke = float(s.loc[s["metric"].str.startswith("SMOKE"), "pearson_r"].iloc[0])
+    r_smoke = float(s.loc[s["metric"] == "SMOKE", "pearson_r"].iloc[0])
     ax1.text(
         0.03, 0.95, f"r = {r_smoke:.2f}  (n = {len(d)})",
         transform=ax1.transAxes, va="top", fontsize=10, color=NAVY, weight="bold",
     )
     style(ax1, "Players repeat themselves", "SMOKE, 2014-15 (pts)", "SMOKE, 2015-16 (pts)")
 
-    order = ["raw FG%", "SMOKE (shot-quality-adjusted)", "eFG%"]
+    order = ["raw FG%", "SMOKE", "eFG%"]
     labels = ["Raw FG%", "SMOKE", "eFG%"]
     vals = [float(s.loc[s["metric"] == o, "pearson_r"].iloc[0]) for o in order]
+    r_raw, r_smoke2, r_efg = vals
     colors = [GRAY, BLUE, LIGHT]
     ax2.bar(labels, vals, color=colors, width=0.6)
     for i, v in enumerate(vals):
         ax2.text(i, v + 0.015, f"{v:.2f}", ha="center", fontsize=9.5, color=NAVY)
     ax2.set_ylim(0, 0.82)
     style(ax2, "Compared to the incumbents", "", "Year-over-year correlation")
+    if r_smoke2 >= r_efg:
+        cmp_line = f"SMOKE (r = {r_smoke2:.2f}) is at least as stable as eFG% (r = {r_efg:.2f}), the metric it refines."
+    else:
+        cmp_line = f"SMOKE (r = {r_smoke2:.2f}) is somewhat less stable than eFG% (r = {r_efg:.2f}), the metric it refines."
     ax2.text(
         0.5, -0.28,
-        "SMOKE is more stable than eFG%, the metric it refines.\n"
-        "Raw FG% is more stable still, because it inherits shot\n"
+        f"{cmp_line}\n"
+        f"Raw FG% is more stable still (r = {r_raw:.2f}), because it inherits shot\n"
         "selection, which SMOKE removes on purpose.",
-        transform=ax2.transAxes, ha="center", va="top", fontsize=8.2, color=GRAY,
+        transform=ax2.transAxes, ha="center", va="top", fontsize=7.6, color=GRAY,
     )
 
     fig.suptitle(
@@ -341,14 +314,16 @@ def fig_convergent() -> None:
     ax.set_xlim(0, 0.60)
     style(
         ax,
-        "Figure 5. Agreement with established metrics, in the order predicted in advance",
+        "Figure 5. Agreement with established metrics",
         "Correlation with SMOKE",
         "",
     )
+    ts_r = float(c.loc[c["metric"] == "ts_percent", "pearson_r"].iloc[0])
+    usg_r = float(c.loc[c["metric"] == "usg_percent", "pearson_r"].iloc[0])
     ax.text(
         0.0, -0.16,
-        "0.54 against true shooting confirms SMOKE measures shooting. 0.19 against usage confirms it does\n"
-        "not measure volume or role. The order of all five was predicted before the test was run.",
+        f"{ts_r:.2f} against true shooting confirms SMOKE measures shooting. {usg_r:.2f} against usage confirms it does\n"
+        "not measure volume or role. True shooting is highest and usage lowest, as predicted.",
         transform=ax.transAxes, ha="left", va="top", fontsize=8.3, color=GRAY,
     )
     fig.tight_layout()
@@ -360,8 +335,8 @@ def fig_predictive() -> None:
     """Q: does it predict anything?"""
     s = pd.read_csv(VAL / "predictive_summary.csv").set_index("test")["value"]
     groups = ["Predicting next-season\nefficiency (eFG%)", "Predicting next-season\nshot-making (SMOKE)"]
-    smoke_vals = [s["a_corr_smoke_vs_futureEFG"], s["b2_corr_smoke_vs_futureSMOKE"]]
-    efg_vals = [s["a_corr_pastEFG_vs_futureEFG"], s["b2_corr_pastEFG_vs_futureSMOKE"]]
+    smoke_vals = [s["a_corr_smoke_vs_futureEFG"], s["c_corr_smoke_vs_futureSMOKE"]]
+    efg_vals = [s["a_corr_pastEFG_vs_futureEFG"], s["c_corr_pastEFG_vs_futureSMOKE"]]
 
     x = np.arange(2)
     w = 0.34
@@ -379,11 +354,16 @@ def fig_predictive() -> None:
     ax.set_ylim(0, 0.66)
     ax.legend(frameon=False, fontsize=9, loc="upper left")
     style(ax, "Figure 6. What SMOKE predicts, and what it does not", "", "Correlation with next season")
+    p_smoke = s["c_p_smoke"]
+    p_text = "p < 0.001" if p_smoke < 0.001 else f"p = {p_smoke:.3f}"
     ax.text(
         0.0, -0.19,
-        "Left: SMOKE loses, by design. Efficiency is self-predictive because it carries shot selection, "
-        "which SMOKE\nstrips out. Right: for the quantity SMOKE actually measures, it nearly doubles eFG%.",
-        transform=ax.transAxes, ha="left", va="top", fontsize=8.3, color=GRAY,
+        f"Left: SMOKE loses ({smoke_vals[0]:.2f} vs {efg_vals[0]:.2f}), by design. Efficiency is self-predictive "
+        "because it carries shot selection,\nwhich SMOKE strips out. Right: for the quantity SMOKE actually "
+        f"measures, it predicts better than eFG% ({smoke_vals[1]:.2f} vs {efg_vals[1]:.2f}).\n"
+        f"Adding SMOKE to eFG% raises adjusted R² from {s['c_adjR2_efg_only']:.2f} to "
+        f"{s['c_adjR2_efg_plus_smoke']:.2f} ({p_text}), incremental information beyond eFG% alone.",
+        transform=ax.transAxes, ha="left", va="top", fontsize=8.0, color=GRAY,
     )
     fig.tight_layout()
     save(fig, "fig6_predictive.png")
@@ -393,10 +373,8 @@ def fig_predictive() -> None:
 def fig_fairness() -> None:
     """Q: does it penalize a type of player?"""
     a = pd.read_csv(VAL / "archetype_means.csv")
-    af = pd.read_csv(VAL / "archetype_fairness.csv")
-    rate = af.groupby("archetype")["distinguishable"].mean()
 
-    order = ["On-Ball Creators", "Catch-and-Shoot", "Mid-Range Scorers", "Interior Finishers"]
+    order = ARCHETYPE_ORDER
     a = a.set_index("archetype").loc[order].reset_index()
 
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(10.4, 4.1), gridspec_kw={"width_ratios": [1.35, 1]})
@@ -405,19 +383,31 @@ def fig_fairness() -> None:
     ax1.axvline(0, color=RED, lw=1, ls="--", alpha=0.8)
     for yp, (_, row) in zip(ypos, a.iterrows(), strict=True):
         color = NAVY if row["archetype"] == "Interior Finishers" else BLUE
-        ax1.plot([row["ci_lo"] * 100, row["ci_hi"] * 100], [yp, yp], color=color, lw=2.4)
-        ax1.plot([row["mean_smoke"] * 100], [yp], "o", color=color, ms=7)
+        ax1.plot([row["ci_lo_shrunk"] * 100, row["ci_hi_shrunk"] * 100], [yp, yp], color=color, lw=2.4)
+        ax1.plot([row["mean_shrunk"] * 100], [yp], "o", color=color, ms=7)
     ax1.set_yticks(ypos)
     ax1.set_yticklabels([f"{r.archetype}  (n={r.n})" for r in a.itertuples()], fontsize=9)
-    style(ax1, "No playing style is penalized", "Mean SMOKE (pts), with 95% interval", "")
+    style(ax1, "No playing style is structurally penalized", "Mean SMOKE (pts), with 95% interval", "")
+
+    interior = a[a["archetype"] == "Interior Finishers"].iloc[0]
+    significant = a[a["p_weighted_vs_0"] < 0.05]
+    if len(significant) == 0:
+        tail = "No archetype's weighted mean is significantly different from zero."
+    else:
+        names = "; ".join(
+            f"{row.archetype} ({row.weighted_mean_raw * 100:+.2f} pp, p = {row.p_weighted_vs_0:.3f})"
+            for row in significant.itertuples()
+        )
+        tail = f"The exception: {names}."
     ax1.text(
         0.0, -0.19,
         "Interior finishers, the group most often assumed to be disadvantaged\n"
-        "by difficulty adjustment, are not distinguishable from zero (p = 0.26).",
+        f"by difficulty adjustment, are not distinguishable from zero (p = {interior['p_weighted_vs_0']:.2f}). "
+        f"{tail}",
         transform=ax1.transAxes, ha="left", va="top", fontsize=8.2, color=GRAY,
     )
 
-    vals = [rate.get(o, np.nan) * 100 for o in order]
+    vals = [float(a.loc[a["archetype"] == o, "separable_share"].iloc[0]) * 100 for o in order]
     colors = [NAVY if o == "Interior Finishers" else BLUE for o in order]
     ax2.bar(range(len(order)), vals, color=colors, width=0.6)
     ax2.set_xticks(range(len(order)))
@@ -442,7 +432,11 @@ def fig_fairness() -> None:
 
 
 # --------------------------------------------------------------- movers
-def fig_movers(n: int = 8) -> None:
+def fig_movers(
+    n: int = 8,
+    filename: str = "movers_chart.png",
+    title: str = "Figure 8. The same players, ranked by raw FG% and then by SMOKE",
+) -> None:
     """Q: what does SMOKE see that the box score misses?"""
     r = pd.read_csv(V1 / "rank_table.csv")
     up = r.nlargest(n, "rank_shift_vs_fg")
@@ -457,12 +451,12 @@ def fig_movers(n: int = 8) -> None:
     ax.axvline(0, color=NAVY, lw=0.9)
     style(
         ax,
-        "Figure 8. The same players, ranked by raw FG% and then by SMOKE",
+        title,
         "Ranking spots moved, raw FG% rank to SMOKE rank",
         "",
     )
     fig.tight_layout()
-    save(fig, "movers_chart.png")
+    save(fig, filename)
 
 
 def main() -> None:

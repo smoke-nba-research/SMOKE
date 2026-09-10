@@ -38,12 +38,14 @@ import pandas as pd
 import requests
 
 from src.pulls._net import bootstrap, call
+from src.pulls._paths import REPO_ROOT
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-RAW_DIR = os.path.join("data", "v2", "raw", "tracking_1516")
-OUT_DIR = os.path.join("data", "v2", "processed")
+# repo-absolute so every consumer (stability.py reads via REPO_ROOT) finds the same files
+RAW_DIR = str(REPO_ROOT / "data" / "v2" / "raw" / "tracking_1516")
+OUT_DIR = str(REPO_ROOT / "data" / "v2" / "processed")
 GH_RAW = "https://raw.githubusercontent.com/sealneaward/nba-movement-data/master/data"
 GH_API = "https://api.github.com/repos/sealneaward/nba-movement-data/contents/data"
 
@@ -54,6 +56,12 @@ BALL_ID = -1
 # release detection (calibrated against NBA reported shot distance — see find_release)
 HELD_DIST_FT = 2.5        # ball this close to the shooter == still in their hands
 RELEASE_WINDOW_S = 5.0    # search window around the PBP clock
+# frames within this many seconds of a chosen release belong to the same shooting
+# motion and cannot be the release of a second shot by the same player
+RELEASE_EXCLUSION_S = 0.5
+# a derived distance this far from the NBA's own reported (whole-foot) distance means
+# the release frame is the wrong play; the row is kept but marked low confidence
+MAX_DIST_ERROR_FT = 5.0
 
 
 # --------------------------------------------------------------------------- io
@@ -201,8 +209,15 @@ def find_release(
     period: int | None = None,
     clock_s: float | None = None,
     window_s: float = RELEASE_WINDOW_S,
+    exclude: set[int] | None = None,
 ) -> tuple[int, list, str] | None:
     """Locate the shot-release frame. Returns (index, moment, confidence).
+
+    ``exclude`` holds frame indices already claimed by this shooter's earlier shots
+    (see extract_game_shots). Without it, a miss and the same player's putback a few
+    seconds later both resolve to whichever held-ball apex is highest in the shared
+    window and receive identical features; 2.4% of the 2015-16 extraction did before
+    this guard existed.
 
     Method (calibrated 2026-07-20 against the NBA's own reported shot distance on a full
     game):
@@ -224,6 +239,8 @@ def find_release(
     nearest: tuple[float, int, list] | None = None  # (ball-shooter dist, idx, moment)
 
     for i, m in enumerate(moments):
+        if exclude and i in exclude:
+            continue
         if not m or len(m) < 6 or not m[5] or m[2] is None:
             continue
         if period is not None and int(m[0]) != period:
@@ -367,11 +384,20 @@ def build_moment_index(game: dict) -> dict[int, list]:
 
 
 def extract_game_shots(game: dict, pbp_shots: pd.DataFrame) -> pd.DataFrame:
-    """One row per shot with derived tracking features."""
+    """One row per shot with derived tracking features.
+
+    Shots are processed in game order and each shooter's claimed release frames (plus
+    the RELEASE_EXCLUSION_S neighbourhood, one shooting motion) are withheld from that
+    shooter's later shots, so two shots never share a frame. A release whose derived
+    distance disagrees with the NBA's reported distance by more than MAX_DIST_ERROR_FT
+    is demoted to low confidence; downstream analysis keeps high-confidence rows only.
+    """
     index = build_moment_index(game)
+    ordered = pbp_shots.sort_values(["PERIOD", "clock_s"], ascending=[True, False])
 
     rows = []
-    for _, s in pbp_shots.iterrows():
+    used: dict[int, set[int]] = {}
+    for _, s in ordered.iterrows():
         shooter_id = int(s["PLAYER1_ID"])
         period = int(s["PERIOD"]) if pd.notna(s.get("PERIOD")) else None
         clock_s = s.get("clock_s")
@@ -381,14 +407,27 @@ def extract_game_shots(game: dict, pbp_shots: pd.DataFrame) -> pd.DataFrame:
         moments = index.get(period)
         if not moments:
             continue
-        found = find_release(moments, shooter_id, period=period, clock_s=clock_s)
+        claimed = used.setdefault((shooter_id, period), set())
+        found = find_release(
+            moments, shooter_id, period=period, clock_s=clock_s, exclude=claimed
+        )
         if found is None:
             continue
         idx, moment, release_conf = found
+        release_clock = float(moment[2])
+        for j in range(max(0, idx - 50), min(len(moments), idx + 51)):
+            mj = moments[j]
+            if mj and len(mj) > 2 and mj[2] is not None and abs(float(mj[2]) - release_clock) <= RELEASE_EXCLUSION_S:
+                claimed.add(j)
         feats = features_at_release(moment, shooter_id)
         if feats is None:
             continue
         feats.update(touch_features(moments, idx, shooter_id))
+        nba_dist = pd.to_numeric(s.get("nba_shot_dist_ft"), errors="coerce")
+        dist_error = round(abs(feats["shot_dist_ft"] - float(nba_dist)), 2) if pd.notna(nba_dist) else None
+        if release_conf == "high" and dist_error is not None and dist_error > MAX_DIST_ERROR_FT:
+            release_conf = "low"
+        feats["dist_error_ft"] = dist_error
         feats["release_confidence"] = release_conf
         feats.update(
             {

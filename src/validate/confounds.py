@@ -5,15 +5,16 @@ A skeptic's first attack on any player metric: "he only looks good because of *w
 partials those out and shows the leaderboard barely moves.
 
 What the base per-shot model already controls (so these are NOT open confounds): home/away
-(LOCATION), game margin (FINAL_MARGIN), period, game clock, shot clock — all model features.
-The one aggregate confound it does *not* see is **opponent defensive quality**: the model
-knows the defender's distance on a shot, but not that the defender plays for a good defense.
+(LOCATION), period, game clock, shot clock — all model features. The one aggregate
+confound it does *not* see is **opponent defensive quality**: the model knows the
+defender's distance on a shot, but not that the defender plays for a good defense.
 
 Method: for each player, compute the strength of the defenses they shot against (opponent
-FG%-allowed, derived from the logs themselves — self-contained, no external join) and their
-home-shot share. Regress player SMOKE on those; the residual is context-adjusted SMOKE.
-Then compare the leaderboard before vs after. If it barely reorders, SMOKE is skill, not
-schedule.
+FG%-allowed, derived from the scored shots themselves — self-contained, no external join)
+and their home-shot share. Regress player SMOKE on those; the residual is context-adjusted
+SMOKE. Then compare the leaderboard (shrunk makes above expectation, the same ordering the
+leaderboard figure and the dashboard use) before vs after. If it barely reorders, SMOKE is
+skill, not schedule.
 
 Deferred: rest days (not in the Kaggle data) and per-possession opponent DRtg (would need an
 external team-ratings join with abbreviation mapping); opponent FG%-allowed is the honest,
@@ -27,55 +28,38 @@ from __future__ import annotations
 
 import sys
 
-import numpy as np
 import pandas as pd
 from scipy import stats
 
-from src.features.kaggle_shot_quality import (
-    MATCHUP_PATTERN,
-    PLAYER_NAME_COLUMN,
-    TARGET_COLUMN,
-    add_derived_features,
-    load_kaggle_shot_logs,
-)
+from src.features.kaggle_shot_quality import OPPONENT_COLUMN, PLAYER_ID_COLUMN, TARGET_COLUMN
+from src.models.build_model_outputs import PLAYER_MIN_SHOTS, load_scored_shots
 from src.pulls._paths import REPO_ROOT
-from src.validate.convergent import norm_name
+from src.validate.predictive import ols
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 VAL_DIR = REPO_ROOT / "data" / "v2" / "validation"
 SMOKE_CSV = VAL_DIR / "player_smoke_with_error_bars.csv"
-MIN_SHOTS = 150
-
-
-def opponent_team(matchup: str, location: str) -> str | None:
-    """The defending team for a shot (the one the shooter is NOT on)."""
-    if pd.isna(matchup) or pd.isna(location):
-        return None
-    m = MATCHUP_PATTERN.search(str(matchup))
-    if not m:
-        return None
-    away, home = m.groups()
-    return away if location == "H" else home     # opposite of SHOOTING_TEAM
+MIN_SHOTS = PLAYER_MIN_SHOTS
+SMOKE_COL = "smoke_rate_shrunk"
 
 
 def main() -> None:
-    shots = add_derived_features(load_kaggle_shot_logs())
-    shots = shots.dropna(subset=["SHOT_RESULT", PLAYER_NAME_COLUMN]).copy()
-    shots["OPP_TEAM"] = [
-        opponent_team(mu, loc)
-        for mu, loc in zip(shots["MATCHUP"], shots["LOCATION"], strict=False)
-    ]
+    shots = load_scored_shots()
     shots["is_home"] = (shots["LOCATION"] == "H").astype(int)
 
-    # opponent defensive quality = FG% allowed by that team, from the logs themselves
-    opp_fg_allowed = shots.groupby("OPP_TEAM")[TARGET_COLUMN].mean().rename("opp_fg_allowed")
-    shots = shots.join(opp_fg_allowed, on="OPP_TEAM")
+    # opponent defensive quality = FG% allowed by that team, from the scored shots.
+    # OPP_TEAM is the second abbreviation of the MATCHUP string on every row (the
+    # string is written from the shooter's side), so no home/away logic is needed.
+    n_before = len(shots)
+    opp_fg_allowed = shots.groupby(OPPONENT_COLUMN)[TARGET_COLUMN].mean().rename("opp_fg_allowed")
+    shots = shots.join(opp_fg_allowed, on=OPPONENT_COLUMN)
+    assert len(shots) == n_before, "opponent join changed the row count"
 
     # per-player context: schedule strength faced + home share
     ctx = (
-        shots.groupby(PLAYER_NAME_COLUMN)
+        shots.groupby(PLAYER_ID_COLUMN)
         .agg(
             shots=(TARGET_COLUMN, "size"),
             opp_fg_allowed=("opp_fg_allowed", "mean"),   # lower = tougher defenses faced
@@ -84,15 +68,13 @@ def main() -> None:
         .reset_index()
     )
     ctx = ctx[ctx["shots"] >= MIN_SHOTS].copy()
-    ctx["key"] = ctx[PLAYER_NAME_COLUMN].map(norm_name)
 
     smoke = pd.read_csv(SMOKE_CSV)
-    smoke["key"] = smoke["player"].map(norm_name)
-    smoke_col = "smoke_rate_shrunk" if "smoke_rate_shrunk" in smoke.columns else "smoke_rate"
-    df = smoke[["key", "player", smoke_col, "smoke_total_shrunk"]].merge(
-        ctx[["key", "opp_fg_allowed", "home_share"]], on="key", how="inner"
+    df = smoke[[PLAYER_ID_COLUMN, "player", "shots", SMOKE_COL, "smoke_total_shrunk"]].merge(
+        ctx[[PLAYER_ID_COLUMN, "opp_fg_allowed", "home_share"]], on=PLAYER_ID_COLUMN, how="inner"
     )
-    df = df.rename(columns={smoke_col: "smoke"})
+    assert len(df) == len(smoke), "every SMOKE player must have a context row"
+    df = df.rename(columns={SMOKE_COL: "smoke"})
 
     print("=" * 78)
     print("PHASE 2.7 — confound checks: does context reorder the SMOKE leaderboard? (2014-15)")
@@ -109,39 +91,49 @@ def main() -> None:
           f"(range: {df['home_share'].min():.2f}–{df['home_share'].max():.2f})")
 
     # residualize SMOKE on the context controls → context-adjusted SMOKE
-    X = np.column_stack([np.ones(len(df)), df["opp_fg_allowed"], df["home_share"]])
-    y = df["smoke"].to_numpy()
-    beta, *_ = np.linalg.lstsq(X, y, rcond=None)
-    fitted = X @ beta
-    ss_tot = ((y - y.mean()) ** 2).sum()
-    r2 = 1 - ((y - fitted) ** 2).sum() / ss_tot
-    df["smoke_adj"] = (y - fitted) + y.mean()     # residual, recentered onto SMOKE's scale
-    print(f"\n  context explains only R² = {r2:.3f} of SMOKE variance "
+    fit = ols(df["smoke"], df[["opp_fg_allowed", "home_share"]])
+    r2 = fit["r2"]
+    df["smoke_adj"] = fit["resid"] + df["smoke"].mean()     # residual, recentered onto SMOKE's scale
+    df["smoke_total_adj"] = df["smoke_adj"] * df["shots"]
+    print(f"\n  context explains only R² = {r2:.4f} of SMOKE variance "
           f"({r2:.1%}) → context is not driving the metric.")
 
-    # before/after leaderboard comparison
-    df["rank_before"] = df["smoke"].rank(ascending=False, method="min")
-    df["rank_after"] = df["smoke_adj"].rank(ascending=False, method="min")
+    # before/after leaderboard comparison, ranked by shrunk makes above expectation
+    df["rank_before"] = df["smoke_total_shrunk"].rank(ascending=False, method="min")
+    df["rank_after"] = df["smoke_total_adj"].rank(ascending=False, method="min")
     df["shift"] = (df["rank_before"] - df["rank_after"]).astype(int)
-    rho = float(stats.spearmanr(df["smoke"], df["smoke_adj"]).statistic)
+    rho = float(stats.spearmanr(df["smoke_total_shrunk"], df["smoke_total_adj"]).statistic)
     top20 = df.nsmallest(20, "rank_before")
     print(f"\n  ranking correlation before vs after controls: Spearman ρ = {rho:.4f}")
     print(f"  top-20 mean |rank shift| = {top20['shift'].abs().mean():.1f}  "
           f"(max {top20['shift'].abs().max()})  |  full-board mean |shift| = {df['shift'].abs().mean():.1f}")
 
-    print("\n  TOP 20 — before vs after context adjustment")
+    print("\n  TOP 20 — before vs after context adjustment (shrunk makes above expectation)")
     print("  " + "-" * 62)
     print(f"  {'player':22s} {'rank→adj':>10} {'shift':>6}   {'SMOKE→adj':>16}")
     print("  " + "-" * 62)
     for _, r in top20.sort_values("rank_before").iterrows():
         arrow = f"{r['rank_before']:.0f}→{r['rank_after']:.0f}"
         sh = f"{r['shift']:+d}" if r["shift"] else "0"
-        vals = f"{r['smoke']:+.4f}→{r['smoke_adj']:+.4f}"
+        vals = f"{r['smoke_total_shrunk']:+.1f}→{r['smoke_total_adj']:+.1f}"
         print(f"  {r['player'][:22]:22s} {arrow:>10} {sh:>6}   {vals:>16}")
     print("  " + "-" * 62)
 
     df.sort_values("rank_before").to_csv(VAL_DIR / "confound_check.csv", index=False)
+    pd.DataFrame(
+        [
+            {"stat": "corr_smoke_vs_opp_fg_allowed", "value": round(r_opp, 4)},
+            {"stat": "corr_smoke_vs_home_share", "value": round(r_home, 4)},
+            {"stat": "r2_context", "value": round(r2, 4)},
+            {"stat": "spearman_before_after", "value": round(rho, 4)},
+            {"stat": "top20_mean_abs_shift", "value": round(float(top20["shift"].abs().mean()), 2)},
+            {"stat": "top20_max_abs_shift", "value": int(top20["shift"].abs().max())},
+            {"stat": "top6_unchanged", "value": int((df.nsmallest(6, "rank_before")["shift"] == 0).all())},
+            {"stat": "n_players", "value": len(df)},
+        ]
+    ).to_csv(VAL_DIR / "confound_summary.csv", index=False)
     print(f"\n  wrote {VAL_DIR / 'confound_check.csv'}  ({len(df)} players)")
+    print(f"  wrote {VAL_DIR / 'confound_summary.csv'}")
 
 
 if __name__ == "__main__":

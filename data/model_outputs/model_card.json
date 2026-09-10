@@ -1,0 +1,91 @@
+{
+  "metric": "SMOKE (Shots Made Over Known Expectation)",
+  "trained_on": "Kaggle 2014-15 NBA shot logs (dansbecker/nba-shot-logs)",
+  "date_built": "2026-09-09",
+  "n_shots": 128069,
+  "n_games": 904,
+  "n_players": 281,
+  "date_range": [
+    "2014-10-28",
+    "2015-03-04"
+  ],
+  "numeric_features": [
+    "SHOT_NUMBER",
+    "PERIOD",
+    "SHOT_CLOCK",
+    "DRIBBLES",
+    "TOUCH_TIME",
+    "SHOT_DIST",
+    "CLOSE_DEF_DIST",
+    "GAME_CLOCK_SECONDS"
+  ],
+  "categorical_features": [
+    "LOCATION",
+    "PTS_TYPE",
+    "SHOT_DIST_ZONE",
+    "TOUCH_TIME_BUCKET",
+    "LATE_CLOCK",
+    "SHOT_CLOCK_OFF"
+  ],
+  "excluded_outcome_columns": [
+    "FINAL_MARGIN",
+    "W"
+  ],
+  "xgboost_params": {
+    "objective": "binary:logistic",
+    "eval_metric": "logloss",
+    "n_estimators": 300,
+    "max_depth": 5,
+    "learning_rate": 0.05,
+    "subsample": 0.8,
+    "colsample_bytree": 0.8,
+    "min_child_weight": 5,
+    "reg_lambda": 1.0,
+    "random_state": 42,
+    "tree_method": "hist",
+    "n_jobs": 4
+  },
+  "cross_fit": {
+    "n_folds": 5,
+    "grouped_by": "GAME_ID",
+    "seed": 42
+  },
+  "oof_roc_auc": 0.6417799297468891,
+  "oof_log_loss": 0.6464661249748065,
+  "oof_mean_expected_minus_actual": 3.080739957406209e-05,
+  "holdout": [
+    {
+      "model": "Base rate",
+      "accuracy": 0.5433779418550992,
+      "roc_auc": 0.5,
+      "log_loss": 0.6894430060633048,
+      "brier": 0.24814999641008798,
+      "n_train": 102065,
+      "n_test": 26004
+    },
+    {
+      "model": "Logistic Regression",
+      "accuracy": 0.6095600676818951,
+      "roc_auc": 0.6303788982237533,
+      "log_loss": 0.6594401025963589,
+      "brier": 0.23369402745024032,
+      "n_train": 102065,
+      "n_test": 26004
+    },
+    {
+      "model": "Gradient-Boosted Trees",
+      "accuracy": 0.6184817720350715,
+      "roc_auc": 0.6399676581696871,
+      "log_loss": 0.6486541032791138,
+      "brier": 0.2291869819164276,
+      "n_train": 102065,
+      "n_test": 26004
+    }
+  ],
+  "versions": {
+    "python": "3.14.6",
+    "xgboost": "3.4.1",
+    "scikit_learn": "1.9.0",
+    "pandas": "3.0.5"
+  }
+}

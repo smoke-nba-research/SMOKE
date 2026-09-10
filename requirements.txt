@@ -7,6 +7,8 @@
 # --- data pulls & storage (Phase 1) ---
 nba_api>=1.10          # stats.nba.com client (tracking splits, shot detail, play-by-play)
 requests>=2.32         # raw fetches for the 2015-16 tracking archive
+py7zr>=0.20            # unpack the per-game .7z tracking archives (tracking_1516.py)
+kaggle>=1.6            # dataset downloads (kaggle_datasets.py, setup_kaggle.py)
 truststore>=0.9        # REQUIRED: use the Windows cert store — local TLS interception
                        # breaks certifi-based verification for *.nba.com. See src/pulls/_net.py
 pandas>=2.2
@@ -23,3 +25,6 @@ xgboost>=2.1           # expected-make model (Phase 2.4 stability test onward)
 
 # --- added later, when the phase needs it ---
 streamlit>=1.37        # Phase 4 dashboard
+
+# --- tests ---
+pytest>=8              # python -m pytest

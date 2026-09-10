@@ -2,17 +2,25 @@
 
 Why this exists
 ---------------
-On this Windows machine, HTTPS to *.nba.com fails certificate verification:
+On the machine this project was built on, HTTPS to *.nba.com used to fail certificate
+verification:
 
     SSLError: HTTPSConnectionPool(host='stats.nba.com', port=443) ...
 
-Diagnosed 2026-07-20: antivirus/firewall TLS interception. The interceptor presents
-its own certificate, which Windows trusts but Python's bundled `certifi` list does not.
+Diagnosed 2026-07-20: antivirus/firewall TLS interception on that machine. The
+interceptor presented its own certificate, which Windows trusted but Python's bundled
+`certifi` list did not.
 
-The fix is NOT `verify=False` (that disables certificate checking entirely and opens
-the door to a real man-in-the-middle). Instead we point Python at the *Windows
-certificate store*, which already trusts the interceptor's root CA — so verification
-stays ON and succeeds.
+The fix was NOT `verify=False` (that disables certificate checking entirely and opens
+the door to a real man-in-the-middle). Instead we pointed Python at the *Windows
+certificate store* via the `truststore` package, which already trusted the
+interceptor's root CA — so verification stayed ON and succeeded.
+
+That interception was specific to the old machine and has since been removed there, so
+`truststore` is now optional: `bootstrap()` uses it when installed and otherwise falls
+back to Python's bundled CA bundle, which is fine on most machines. Install truststore
+only if stats.nba.com starts failing certificate verification again because of local
+TLS interception.
 
 Import and call `bootstrap()` once, before any nba_api call:
 
@@ -34,7 +42,12 @@ DEFAULT_TIMEOUT = 45
 
 
 def bootstrap() -> None:
-    """Route SSL verification through the OS trust store. Idempotent."""
+    """Route SSL verification through the OS trust store, if truststore is installed.
+
+    Idempotent. Never raises: truststore is an opt-in fix for local TLS interception,
+    not a hard requirement, so a missing install should degrade to Python's bundled CA
+    bundle (certifi) with a warning, not block every pull.
+    """
     global _READY
     if _READY:
         return
@@ -42,11 +55,13 @@ def bootstrap() -> None:
         import truststore
 
         truststore.inject_into_ssl()
-    except ImportError as exc:  # pragma: no cover
-        raise RuntimeError(
-            "truststore is required for stats.nba.com access on this machine "
-            "(TLS interception). Install it: pip install truststore"
-        ) from exc
+    except ImportError:
+        print(
+            "      !! truststore not installed; using Python's bundled CA bundle for "
+            "certificate verification. This is fine on most machines. If stats.nba.com "
+            "calls fail with an SSLError, it likely means local TLS interception -- "
+            "install truststore (`pip install truststore`) and re-run."
+        )
     _READY = True
 
 

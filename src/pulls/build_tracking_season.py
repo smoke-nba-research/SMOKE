@@ -17,6 +17,11 @@ Run:
     .venv/Scripts/python.exe -m src.pulls.build_tracking_season                # everything
     .venv/Scripts/python.exe -m src.pulls.build_tracking_season --max-games 25 # a slice
     .venv/Scripts/python.exe -m src.pulls.build_tracking_season --status       # progress
+    .venv/Scripts/python.exe -m src.pulls.build_tracking_season --combine      # season file only
+
+When every game is accounted for, the per-game parquets are concatenated into
+data/v2/processed/shots_tracking_1516_season.parquet, which src/validate/stability.py
+reads. A partial run (time or game limit) does not write the season file.
 """
 
 from __future__ import annotations
@@ -30,6 +35,7 @@ import traceback
 
 import pandas as pd
 
+from src.pulls._paths import REPO_ROOT
 from src.pulls.tracking_1516 import (
     EmptyArchiveError,
     download_game,
@@ -42,10 +48,12 @@ from src.pulls.tracking_1516 import (
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-SHOTS_DIR = os.path.join("data", "v2", "processed", "shots")
-PBP_DIR = os.path.join("data", "v2", "raw", "pbp")
-FAIL_LOG = os.path.join("data", "v2", "processed", "_failures.csv")
-EMPTY_LOG = os.path.join("data", "v2", "processed", "_empty_upstream.csv")
+_PROCESSED = REPO_ROOT / "data" / "v2" / "processed"
+SHOTS_DIR = str(_PROCESSED / "shots")
+PBP_DIR = str(REPO_ROOT / "data" / "v2" / "raw" / "pbp")
+FAIL_LOG = str(_PROCESSED / "_failures.csv")
+EMPTY_LOG = str(_PROCESSED / "_empty_upstream.csv")
+SEASON_FILE = str(_PROCESSED / "shots_tracking_1516_season.parquet")
 
 
 def stem(filename: str) -> str:
@@ -97,6 +105,18 @@ def status() -> None:
         print(f"open failures      : {len(pd.read_csv(FAIL_LOG))} (see {FAIL_LOG})")
 
 
+def combine_season() -> pd.DataFrame:
+    """Concatenate every per-game parquet into the season file stability.py reads."""
+    files = sorted(f for f in os.listdir(SHOTS_DIR) if f.endswith(".parquet"))
+    frames = [pd.read_parquet(os.path.join(SHOTS_DIR, f)) for f in files]
+    season = pd.concat(frames, ignore_index=True)
+    season.to_parquet(SEASON_FILE, index=False)
+    hi = (season["release_confidence"] == "high").mean()
+    print(f"season file: {len(season):,} shots from {len(files)} games "
+          f"({hi:.1%} high-confidence) -> {SEASON_FILE}")
+    return season
+
+
 def record_failure(filename: str, reason: str) -> None:
     os.makedirs(os.path.dirname(FAIL_LOG), exist_ok=True)
     row = pd.DataFrame([{"file": filename, "reason": reason[:300], "ts": time.strftime("%F %T")}])
@@ -115,16 +135,21 @@ def main() -> None:
     ap.add_argument("--max-minutes", type=float, default=0, help="0 = no time limit")
     ap.add_argument("--purge-raw", action="store_true", help="delete each .7z after use")
     ap.add_argument("--status", action="store_true")
+    ap.add_argument("--combine", action="store_true", help="only rebuild the season file")
     args = ap.parse_args()
 
     if args.status:
         status()
+        return
+    if args.combine:
+        combine_season()
         return
 
     os.makedirs(SHOTS_DIR, exist_ok=True)
     games = list_archive_games()
     empty = known_empty_games()
     todo = [g for g in games if not os.path.exists(out_path(g)) and g not in empty]
+    limited = bool(args.max_games or args.max_minutes)
     if args.max_games:
         todo = todo[: args.max_games]
 
@@ -134,6 +159,7 @@ def main() -> None:
     if not todo:
         print("nothing to do — season already extracted.")
         status()
+        combine_season()
         return
 
     started = time.time()
@@ -211,6 +237,11 @@ def main() -> None:
     print(f"\ndone this run: {ok} ok, {failed} failed, {empty_upstream} empty-upstream "
           f"(genuine gaps), {shots_total:,} shots, {mins:.1f} min")
     status()
+    remaining = [g for g in games if not os.path.exists(out_path(g)) and g not in known_empty_games()]
+    if not remaining and not limited:
+        combine_season()
+    elif not remaining:
+        print("every game extracted; run with --combine to write the season file")
 
 
 if __name__ == "__main__":

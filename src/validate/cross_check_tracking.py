@@ -30,11 +30,11 @@ import sys
 import pandas as pd
 
 from src.pulls._net import call
+from src.pulls.build_tracking_season import cached_pbp
 from src.pulls.tracking_1516 import (
     HOOPS,
     download_game,
     extract_game_shots,
-    get_pbp_shots,
     list_archive_games,
     load_game,
 )
@@ -189,10 +189,11 @@ def check_b(ours: pd.DataFrame) -> None:
     if nba.empty:
         print("  !! could not fetch NBA buckets")
         return
-    mine = our_defender_buckets(ours[ours["release_confidence"] == "high"])
+    high = ours[ours["release_confidence"] == "high"]
+    mine = our_defender_buckets(high)
     m = nba.merge(mine, on="bucket", how="outer", suffixes=("_nba", "_ours"))
     print(f"\n  NBA = full 2015-16 season ({nba['FGA'].sum():,} FGA)")
-    print(f"  ours = {len(ours):,} high-confidence shots from our sampled games\n")
+    print(f"  ours = {len(high):,} high-confidence shots (of {len(ours):,}) from our sampled games\n")
     print(f"  {'bucket':24s} {'share_NBA':>10} {'share_ours':>11} {'FG%_NBA':>9} {'FG%_ours':>9}")
     for _, r in m.iterrows():
         print(f"  {str(r['bucket']):24s} {r.get('share_nba', float('nan')):9.1f}% "
@@ -217,7 +218,7 @@ def main() -> None:
         path = download_game(fn)
         game = load_game(path)
         gid = game["gameid"]
-        pbp = get_pbp_shots(gid)
+        pbp = cached_pbp(gid)
         if pbp.empty:
             print(f"  [{i}/{len(files)}] {fn}: no PBP, skipped")
             continue
