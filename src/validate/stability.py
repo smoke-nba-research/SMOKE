@@ -180,7 +180,9 @@ def two_season_panel(s14, e14, s16, e16, min_shots: int) -> pd.DataFrame:
     p16 = player_scores(s16, e16, min_shots).drop(columns=["player"]).rename(
         columns=lambda c: c if c == "player_id" else f"{c}_16"
     )
-    return p14.merge(p16, on="player_id", how="inner")
+    merged = p14.merge(p16, on="player_id", how="inner")
+    assert len(merged) <= min(len(p14), len(p16)) and merged["player_id"].is_unique
+    return merged
 
 
 def corr_rows(panel: pd.DataFrame, design: str) -> list[dict]:
@@ -238,8 +240,10 @@ def main() -> None:
 
     panel = two_season_panel(s14, e14, s16, e16, MIN_SHOTS)
     panel_one = two_season_panel(s14, e14_one, s16, e16_one, MIN_SHOTS)
+    n_panel = len(panel)
     panel = panel.merge(panel_one[["player_id", "smoke_14", "smoke_16"]].rename(
         columns={"smoke_14": "smoke_14_onemodel", "smoke_16": "smoke_16_onemodel"}), on="player_id")
+    assert len(panel) == n_panel, "both designs score the same players"
     print(f"\n  players clearing {MIN_SHOTS} shots in BOTH seasons (the stability sample): {len(panel)}")
     if len(panel) < 30:
         print("  !! sample too small to trust — investigate")

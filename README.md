@@ -98,9 +98,11 @@ SMOKE measures shot-making only. It says nothing about defense, playmaking, or r
 
 ## Credit
 
-SMOKE grew out of a DAT 490 capstone at Arizona State University built with
-**Marc Rajesh** (modeling), **Calder Wyllie** (exploratory analysis and visualization),
-and **Germain Meza** (data engineering). The work here extends that foundation.
+The paper is by **Cole Campbell**, **Marc Rajesh**, and **Calder Wyllie**. SMOKE grew out of a
+DAT 490 capstone at Arizona State University built by the three of them with **Germain Meza**,
+whose data engineering built the shot pipeline this work extends; within the capstone Rajesh led
+the modeling and Wyllie the exploratory analysis and visualization. The post-capstone research,
+validation, and writing were led by Campbell.
 
 ## License
 

@@ -26,9 +26,11 @@ from src.pulls._paths import REPO_ROOT
 def build_archetypes(shots: pd.DataFrame, player_residuals: pd.DataFrame) -> pd.DataFrame:
     """Cluster the overperforming players into playing-style archetypes."""
     style = build_player_style(shots, min_shots=PLAYER_MIN_SHOTS)
+    n_style = len(style)
     style = style.merge(
         player_residuals[[PLAYER_ID_COLUMN, "smoke_total"]], on=PLAYER_ID_COLUMN, how="inner"
     )
+    assert len(style) == n_style, "every qualified player must have a residual row"
     overperformers = style[style["smoke_total"] > 0].copy()
     clustered = cluster_archetypes(overperformers)
     return clustered.sort_values(["archetype", "smoke_total"], ascending=[True, False]).reset_index(drop=True)

@@ -99,7 +99,9 @@ def main() -> None:
     smoke = pd.read_csv(SMOKE_CSV)
     smoke["key"] = smoke["player"].map(norm_name)
     rank = pd.read_csv(OUTPUT_DIR / "rank_table.csv")[[PLAYER_ID_COLUMN, "expected_fg_pct"]]
+    n_smoke = len(smoke)
     smoke = smoke.merge(rank, on=PLAYER_ID_COLUMN, how="inner")
+    assert len(smoke) == n_smoke, "every SMOKE player must have a rank-table row"
     smoke = smoke[["key", PLAYER_ID_COLUMN, "player", SMOKE_COL, "expected_fg_pct"]].rename(
         columns={SMOKE_COL: "smoke_N", "expected_fg_pct": "expected_fg_N"}
     )
@@ -112,6 +114,7 @@ def main() -> None:
         smoke.merge(efg_n[["key", "efg_N", "fga_N"]], on="key", how="inner")
         .merge(efg_n1[["key", "efg_N1", "fga_N1"]], on="key", how="inner")
     )
+    assert len(df) <= n_smoke and df["key"].is_unique, "season merges must not duplicate players"
     df = df[df["fga_N1"] >= MIN_FGA_N1].dropna(subset=["smoke_N", "efg_N", "efg_N1"])
 
     print("=" * 78)
@@ -142,6 +145,7 @@ def main() -> None:
     #     beyond past efficiency? SMOKE_N+1 comes from the independently fitted 2015-16 model.
     panel = pd.read_parquet(PANEL)[[PLAYER_ID_COLUMN, "smoke_16", "shots_16"]]
     dc = df.merge(panel, on=PLAYER_ID_COLUMN, how="inner").dropna(subset=["smoke_16"])
+    assert len(dc) <= len(df) and dc[PLAYER_ID_COLUMN].is_unique, "panel merge must not duplicate players"
     r_ss = float(stats.pearsonr(dc["smoke_N"], dc["smoke_16"]).statistic)
     r_es = float(stats.pearsonr(dc["efg_N"], dc["smoke_16"]).statistic)
     inc = ols(dc["smoke_16"], dc[["efg_N", "smoke_N"]])

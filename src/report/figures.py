@@ -399,10 +399,15 @@ def fig_fairness() -> None:
             for row in significant.itertuples()
         )
         tail = f"The exception: {names}."
+    p_int = float(interior["p_weighted_vs_0"])
+    verdict = (
+        f"are not distinguishable from zero (p = {p_int:.2f})" if p_int >= 0.05
+        else f"differ from zero ({interior['weighted_mean_raw'] * 100:+.2f} pp, p = {p_int:.3f})"
+    )
     ax1.text(
         0.0, -0.19,
         "Interior finishers, the group most often assumed to be disadvantaged\n"
-        f"by difficulty adjustment, are not distinguishable from zero (p = {interior['p_weighted_vs_0']:.2f}). "
+        f"by difficulty adjustment, {verdict}. "
         f"{tail}",
         transform=ax1.transAxes, ha="left", va="top", fontsize=8.2, color=GRAY,
     )

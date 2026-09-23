@@ -182,11 +182,11 @@ def build_pdf() -> None:
         fitz.Rect(ML, PH - 58, ML + CW, PH - 22),
         "SMOKE is an independent analysis of publicly available NBA data and is not "
         "affiliated with or endorsed by the NBA. Methods, validation, and code are "
-        "open and reproducible. Cole Campbell, 2026. Research build.",
+        "open and reproducible. Campbell, Rajesh, and Wyllie, 2026. Research build.",
         "sans", 8, GRAY_RGB,
     )
 
-    doc.set_metadata({"title": "SMOKE one-pager", "author": "Cole Campbell"})
+    doc.set_metadata({"title": "SMOKE one-pager", "author": "Cole Campbell, Marc Rajesh, Calder Wyllie"})
     doc.subset_fonts(verbose=False)
     doc.save(PDF, deflate=True, garbage=4)
     print(f"wrote {PDF}")
