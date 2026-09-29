@@ -3,4 +3,5 @@ __pycache__/
 *.pyc
 .ruff_cache/
 data/raw/
-data/v2/
+data/v2/raw/
+data/v2/processed/

@@ -1,0 +1,7 @@
+design,metric,n,pearson_r,pearson_p,spearman_rho
+per-season cross-fit,SMOKE,214,0.478,1.3424884862065114e-13,0.433
+per-season cross-fit,raw FG%,214,0.673,1.444928295263522e-29,0.626
+per-season cross-fit,eFG%,214,0.435,2.7340294918403235e-11,0.393
+one model (2014-15),SMOKE,214,0.496,1.072796144247616e-14,0.469
+one model (2014-15),raw FG%,214,0.673,1.444928295263522e-29,0.626
+one model (2014-15),eFG%,214,0.435,2.7340294918403235e-11,0.393

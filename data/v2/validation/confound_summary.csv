@@ -1,0 +1,9 @@
+stat,value
+corr_smoke_vs_opp_fg_allowed,0.0601
+corr_smoke_vs_home_share,-0.0503
+r2_context,0.0059
+spearman_before_after,0.9959
+top20_mean_abs_shift,1.15
+top20_max_abs_shift,5.0
+top6_unchanged,0.0
+n_players,266.0

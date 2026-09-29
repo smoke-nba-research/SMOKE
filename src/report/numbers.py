@@ -16,6 +16,7 @@ import sys
 
 import pandas as pd
 
+from src.features.names import norm_name
 from src.models.build_model_outputs import MODEL_CARD, OUTPUT_DIR, load_scored_shots
 from src.pulls._paths import REPO_ROOT
 
@@ -29,6 +30,83 @@ OUT = VAL / "headline_numbers.json"
 def _kv(path, key_col, value_col) -> dict:
     df = pd.read_csv(path)
     return dict(zip(df[key_col], df[value_col], strict=True))
+
+
+def application(players: pd.DataFrame, rank: pd.DataFrame, scored: pd.DataFrame) -> dict:
+    """The practitioner-facing quantities: what share of FG% is the shots, how many shots
+    it takes to trust a player's SMOKE, and one worked example.
+
+    * ``fg_r2_from_difficulty``: across qualified players, the share of the variance in
+      field goal percentage explained by expected field goal percentage alone (the
+      difficulty of the shots taken). FG% = expected FG% + SMOKE rate exactly.
+    * ``shots_for_reliability``: from the shrinkage model, reliability of a player's raw
+      SMOKE rate on n shots is tau^2 / (tau^2 + s^2 / n), with s^2 the per-shot residual
+      variance and tau^2 the DerSimonian-Laird between-player variance; solving for n.
+    * ``example_pair``: among players with at least 500 shots whose field goal
+      percentages differ by at most 0.4 points and who are both separable from league
+      average, the pair with the largest gap in shrunk SMOKE.
+    """
+    d = players.merge(rank[["player_id", "fg_pct", "expected_fg_pct"]], on="player_id")
+    assert len(d) == len(players), "every leaderboard player must have a rank-table row"
+
+    x, se = d["smoke_rate"].to_numpy(), d["smoke_rate_se"].to_numpy()
+    w = 1.0 / se**2
+    fixed = float((w * x).sum() / w.sum())
+    q = float((w * (x - fixed) ** 2).sum())
+    c = float(w.sum() - (w**2).sum() / w.sum())
+    tau2 = max(0.0, (q - (len(x) - 1)) / c)
+    s2 = float((scored["SHOT_MADE"] - scored["expected"]).var())
+
+    big = d[(d["shots"] >= 500) & d["distinguishable"]].reset_index(drop=True)
+    best = None
+    for i in range(len(big)):
+        for j in range(i + 1, len(big)):
+            a, b = big.iloc[i], big.iloc[j]
+            if abs(a["fg_pct"] - b["fg_pct"]) > 0.004:
+                continue
+            gap = abs(a["smoke_rate_shrunk"] - b["smoke_rate_shrunk"])
+            if best is None or gap > best[0]:
+                best = (gap, a, b)
+    pair = []
+    if best is not None:
+        hi, lo = sorted([best[1], best[2]], key=lambda r: -r["smoke_rate_shrunk"])
+        for r in (hi, lo):
+            pair.append({
+                "player": r["player"], "shots": int(r["shots"]), "fg_pct": float(r["fg_pct"]),
+                "expected_fg_pct": float(r["expected_fg_pct"]),
+                "smoke_total": float(r["smoke_total"]),
+                "ci": [float(r["smoke_total_lo"]), float(r["smoke_total_hi"])],
+                "smoke_rate_shrunk": float(r["smoke_rate_shrunk"]),
+            })
+
+    # How many qualified players reach each reliability threshold in a full season?
+    # Official 2014-15 field goal attempts (Basketball-Reference totals) are joined on
+    # normalized name; the file covers the whole season, the shot logs about 73% of it.
+    totals = pd.read_csv(REPO_ROOT / "data" / "raw" / "kaggle" / "historical_stats" / "Player Totals.csv")
+    season = totals[totals["season"] == 2015].sort_values("mp", ascending=False)
+    season = season.drop_duplicates("player_id", keep="first").assign(key=lambda f: f["player"].map(norm_name))
+    assert season["key"].is_unique
+    full = d.assign(key=d["player"].map(norm_name)).merge(season[["key", "fga"]], on="key", how="inner")
+    assert len(full) == len(d), "every qualified player must have an official season line"
+    shots_needed = {str(r): int(round(s2 * r / ((1 - r) * tau2))) for r in (0.5, 0.6, 0.7, 0.8)}
+
+    return {
+        "fg_r2_from_difficulty": float(d["fg_pct"].corr(d["expected_fg_pct"]) ** 2),
+        "corr_difficulty_vs_smoke": float(d["expected_fg_pct"].corr(d["smoke_rate"])),
+        "smoke_true_skill_share": float(tau2 / d["smoke_rate"].var()),
+        "tau": float(tau2**0.5),
+        "per_shot_residual_var": s2,
+        "shots_for_reliability": shots_needed,
+        "share_reaching_in_full_season": {
+            r: float((full["fga"] >= n).mean()) for r, n in shots_needed.items()
+        },
+        "official_fga_median": float(full["fga"].median()),
+        "example_pair_official_fg_pct": {
+            p["player"]: float(season.loc[season["key"] == norm_name(p["player"]), "fg_percent"].iloc[0])
+            for p in pair
+        },
+        "example_pair": pair,
+    }
 
 
 def collect() -> dict:
@@ -134,6 +212,7 @@ def collect() -> dict:
         "convergent": {m: float(conv.loc[m, "pearson_r"]) for m in ["ts_percent", "obpm", "per", "bpm", "usg_percent"]},
         "predictive": {k: float(v) for k, v in pred.items()},
         "confounds": {k: float(v) for k, v in conf.items()},
+        "application": application(players, rank, scored),
         "fairness": {
             "kruskal_p": float(omni["kruskal_p"]),
             "archetypes": {

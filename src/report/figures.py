@@ -464,6 +464,64 @@ def fig_movers(
     save(fig, filename)
 
 
+# --------------------------------------------------------------- shots or shooter
+def fig_shots_or_shooter() -> None:
+    """Q: how much of a player's field goal percentage is the shots, and how much is him?
+
+    Every qualified player, actual FG% against the FG% his shots predicted. The diagonal
+    is "made exactly what the shots predicted"; distance above it is SMOKE. The example
+    pair is the one numbers.py selects by rule (same FG%, both separable, largest gap).
+    """
+    import json
+
+    r = pd.read_csv(V1 / "rank_table.csv")
+    app = json.loads((VAL / "headline_numbers.json").read_text(encoding="utf-8"))["application"]
+    pair = app["example_pair"]
+    x, y = r["expected_fg_pct"] * 100, r["fg_pct"] * 100
+
+    fig, ax = plt.subplots(figsize=(7.6, 5.4))
+    lo, hi = min(x.min(), y.min()) - 1.5, max(x.max(), y.max()) + 1.5
+    ax.plot([lo, hi], [lo, hi], color=GRAY, lw=1, ls="--", zorder=1)
+    ax.text(hi - 0.5, hi - 1.6, "made exactly what\nthe shots predicted", ha="right", va="top",
+            fontsize=8, color=GRAY)
+    ax.scatter(x, y, s=22, color=LIGHT, edgecolor="none", zorder=2)
+
+    px = [p["expected_fg_pct"] * 100 for p in pair]
+    py = [p["fg_pct"] * 100 for p in pair]
+    ax.plot(px, py, color=NAVY, lw=1.2, zorder=3)
+    ax.scatter(px, py, s=70, color=NAVY, edgecolor="white", linewidth=2, zorder=4)
+    for p, xx, yy in zip(pair, px, py, strict=True):
+        above = p["smoke_total"] > 0
+        # labels sit in the empty corners (upper left above the diagonal, lower right
+        # below it) with a leader line, so they never cover the point cloud
+        ax.annotate(
+            f"{nm(p['player'])}\n{p['fg_pct']*100:.1f}% FG; shots predicted {p['expected_fg_pct']*100:.1f}%\n"
+            f"{p['smoke_total']:+.0f} makes vs expectation",
+            (xx, yy), xycoords="data",
+            xytext=(0.04, 0.80) if above else (0.60, 0.16), textcoords="axes fraction",
+            ha="left", va="center", fontsize=8.4, color=NAVY,
+            arrowprops={"arrowstyle": "-", "color": NAVY, "lw": 0.8, "shrinkB": 6},
+        )
+    ax.set_xlim(lo, hi)
+    ax.set_ylim(lo, hi)
+    ax.set_aspect("equal")
+    style(
+        ax,
+        "Same percentage, different shooters",
+        "Expected FG%: what the player's shots predicted (higher = easier shots)",
+        "Actual FG%",
+    )
+    ax.text(
+        0.0, -0.17,
+        f"Each dot is one of {len(r)} players with at least 150 tracked shots in 2014-15.\n"
+        f"Shot difficulty alone explains {app['fg_r2_from_difficulty']:.0%} of the variation in FG% across players.\n"
+        "SMOKE is a player's vertical distance above or below the dashed line.",
+        transform=ax.transAxes, ha="left", va="top", fontsize=8.2, color=GRAY,
+    )
+    fig.tight_layout()
+    save(fig, "fig_shots_or_shooter.png")
+
+
 def main() -> None:
     print("Building the SMOKE figure suite")
     print("  scoring shots for the model diagnostics (takes a moment)")
@@ -476,6 +534,7 @@ def main() -> None:
     fig_predictive()
     fig_fairness()
     fig_movers()
+    fig_shots_or_shooter()
     print("done")
 
 

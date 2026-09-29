@@ -7,13 +7,19 @@ model expected, given where and how they shot. Positive means a player makes mor
 than the difficulty of their attempts predicts. The construction is deliberately simple.
 The contribution is that every claim about the metric is tested and reproducible.
 
-## The premise
+## The question
 
-A field goal percentage rewards two different skills at once: taking shots that are easy
-to make, and making shots that are hard. They are close to independent in the data, so a
-player's shot diet tells you almost nothing about whether he beats it.
+How much of a player's field goal percentage reflects his ability, and how much reflects
+the shots he gets? Field goal percentage is makes over attempts; it cannot tell a player
+who converts hard shots from one who takes easy ones. Across qualified players in the
+2014-15 tracking data, shot difficulty alone explains 59% of the variation in field
+goal percentage. Dirk Nowitzki and DeMarcus Cousins shot 46.2% and 46.4% on tracked shots, yet the model expected 40.9% from Nowitzki's attempts and 49.8% from Cousins's: Nowitzki made 43 more shots than his attempts predicted, Cousins 26 fewer.
 
-![Shot selection and shot-making are separate skills](artifacts/fig2_thesis.png)
+![Same percentage, different shooters](artifacts/fig_shots_or_shooter.png)
+
+Trusting a player's number takes volume: about 340 shots before half of his SMOKE is
+repeatable skill, and about 790 before 70% is, a volume only 28% of qualified
+players reach in a full season. That is why every value here ships with an interval.
 
 ## Validation summary
 
@@ -24,7 +30,7 @@ player's shot diet tells you almost nothing about whether he beats it.
 | Predicts next-season shot-making | 0.40, versus 0.31 for efficiency; adds information beyond efficiency (p < 0.001) |
 | Convergent validity | true shooting 0.62 down to usage 0.19 |
 | Confound checks | opponent quality and venue explain 0.6% of variance; rankings correlate 0.996 after controls |
-| Archetype fairness | no playing style structurally penalized (interior finishers p = 0.41); Interior Finishers are the best-measured group |
+| Archetype fairness | no playing style penalized overall (p = 0.17; interior finishers p = 0.41); Interior Finishers are the best-measured group |
 
 Every published value ships with a confidence interval. Only 53 of
 266 qualified players separate statistically from league average within a single
@@ -64,8 +70,10 @@ Common objections, answered with the supporting figure: [FAQ.md](FAQ.md).
    python -m src.report.figures
    ```
 
-   Outputs land in `data/v2/validation/` and should match the figures in `VALIDATION.md`;
-   the figure suite is rebuilt into `artifacts/`.
+   Outputs land in `data/v2/validation/`, where this repository already ships the
+   reference outputs from our run. After re-running, `git diff data/v2/validation`
+   shows exactly what, if anything, your run changed. The figure suite is rebuilt
+   into `artifacts/`.
 
 4. Run the tests:
 
@@ -89,8 +97,8 @@ python -m streamlit run dashboard/app.py
 
 Four pages: Player, Leaderboard, Movers, Methods. See [dashboard/README.md](dashboard/README.md).
 
-The dashboard reads the validation outputs, so run the scripts above before starting it.
-A fresh clone does not ship those files, because they are generated rather than authored.
+The dashboard reads the validation outputs, which ship with the repository, so it runs
+on a fresh clone without re-running the pipeline.
 
 ## Limitations
 

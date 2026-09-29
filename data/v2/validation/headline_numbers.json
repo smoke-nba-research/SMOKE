@@ -1,0 +1,341 @@
+{
+  "data": {
+    "n_shots_1415": 128069,
+    "n_games_1415": 904,
+    "season_games": 1230,
+    "n_players_1415": 281,
+    "date_range_1415": [
+      "2014-10-28",
+      "2015-03-04"
+    ],
+    "n_shots_1516_extracted": 104721,
+    "n_shots_1516_high_conf": 90559,
+    "share_high_conf_1516": 0.8647644693996429,
+    "n_games_1516": 631,
+    "date_range_1516": [
+      "2015-10-27",
+      "2016-01-23"
+    ],
+    "n_players_1516": 446,
+    "tracking_dist_error_mae_ft": 1.4546379708256496
+  },
+  "model": {
+    "features": [
+      "SHOT_NUMBER",
+      "PERIOD",
+      "SHOT_CLOCK",
+      "DRIBBLES",
+      "TOUCH_TIME",
+      "SHOT_DIST",
+      "CLOSE_DEF_DIST",
+      "GAME_CLOCK_SECONDS",
+      "LOCATION",
+      "PTS_TYPE",
+      "SHOT_DIST_ZONE",
+      "TOUCH_TIME_BUCKET",
+      "LATE_CLOCK",
+      "SHOT_CLOCK_OFF"
+    ],
+    "excluded_outcome_columns": [
+      "FINAL_MARGIN",
+      "W"
+    ],
+    "holdout": {
+      "Base rate": {
+        "accuracy": 0.5433779418550992,
+        "roc_auc": 0.5,
+        "log_loss": 0.6894430060633048,
+        "brier": 0.2481499964100879
+      },
+      "Logistic Regression": {
+        "accuracy": 0.6095600676818951,
+        "roc_auc": 0.6303788982237533,
+        "log_loss": 0.6594401025963589,
+        "brier": 0.2336940274502403
+      },
+      "Gradient-Boosted Trees": {
+        "accuracy": 0.6184817720350715,
+        "roc_auc": 0.6399676581696871,
+        "log_loss": 0.6486541032791138,
+        "brier": 0.2291869819164276
+      }
+    },
+    "oof_roc_auc": 0.6417799297468891,
+    "oof_log_loss": 0.6464661249748065,
+    "oof_calibration_gap": 3.080739957406209e-05,
+    "cross_fit": {
+      "n_folds": 5,
+      "grouped_by": "GAME_ID",
+      "seed": 42
+    }
+  },
+  "leaderboard": {
+    "n_qualified": 266,
+    "min_shots": 150,
+    "n_distinguishable": 53,
+    "share_distinguishable": 0.19924812030075187,
+    "mean_shots_per_qualified": 475.4736842105263,
+    "median_shots_per_qualified": 435.0,
+    "mean_ci_half_width_makes": 19.721365598833998,
+    "league_mean_rate": -0.0039089636139400296,
+    "reliability_min": 0.2948701937418165,
+    "reliability_max": 0.7598859471404762,
+    "reliability_median": 0.5653250365641069,
+    "top5_by_shrunk_total": [
+      {
+        "player": "stephen curry",
+        "shots": 968,
+        "raw_total": 62.5,
+        "ci": [
+          32,
+          91
+        ],
+        "shrunk_total": 45.3,
+        "reliability": 0.73
+      },
+      {
+        "player": "chris paul",
+        "shots": 885,
+        "raw_total": 60.7,
+        "ci": [
+          32,
+          91
+        ],
+        "shrunk_total": 42.2,
+        "reliability": 0.71
+      },
+      {
+        "player": "lebron james",
+        "shots": 978,
+        "raw_total": 44.5,
+        "ci": [
+          16,
+          74
+        ],
+        "shrunk_total": 33.0,
+        "reliability": 0.75
+      },
+      {
+        "player": "klay thompson",
+        "shots": 971,
+        "raw_total": 42.0,
+        "ci": [
+          14,
+          72
+        ],
+        "shrunk_total": 30.4,
+        "reliability": 0.74
+      },
+      {
+        "player": "kyle korver",
+        "shots": 478,
+        "raw_total": 53.7,
+        "ci": [
+          33,
+          74
+        ],
+        "shrunk_total": 29.9,
+        "reliability": 0.57
+      }
+    ],
+    "rank_spearman_vs_fg": 0.4355983521437623,
+    "rank_spearman_vs_efg": 0.6777388758140417,
+    "corr_expected_fg_vs_smoke": -0.19377669449704166,
+    "biggest_riser": {
+      "player": "jamal crawford",
+      "spots": 168
+    },
+    "biggest_faller": {
+      "player": "omer asik",
+      "spots": -233
+    }
+  },
+  "reliability": {
+    "split_half_alternating_r": 0.37,
+    "split_half_alternating_sb": 0.54,
+    "split_half_date_r": 0.456,
+    "split_half_date_sb": 0.626
+  },
+  "stability": {
+    "n_players": 214,
+    "smoke_r": 0.478,
+    "smoke_rho": 0.433,
+    "fg_r": 0.673,
+    "efg_r": 0.435,
+    "smoke_r_onemodel": 0.496,
+    "onemodel_gap_1516": 0.0125397294284148,
+    "threshold_sweep": {
+      "50": {
+        "SMOKE": 0.491,
+        "eFG%": 0.413,
+        "FG%": 0.672,
+        "n": 234
+      },
+      "100": {
+        "SMOKE": 0.478,
+        "eFG%": 0.435,
+        "FG%": 0.673,
+        "n": 214
+      },
+      "150": {
+        "SMOKE": 0.518,
+        "eFG%": 0.495,
+        "FG%": 0.709,
+        "n": 184
+      },
+      "200": {
+        "SMOKE": 0.507,
+        "eFG%": 0.418,
+        "FG%": 0.633,
+        "n": 145
+      },
+      "250": {
+        "SMOKE": 0.541,
+        "eFG%": 0.5,
+        "FG%": 0.7,
+        "n": 111
+      }
+    },
+    "n_shots_1415_used": 128069,
+    "mean_smoke_16_primary": 0.002733519491321745
+  },
+  "convergent": {
+    "ts_percent": 0.621,
+    "obpm": 0.462,
+    "per": 0.379,
+    "bpm": 0.402,
+    "usg_percent": 0.193
+  },
+  "predictive": {
+    "a_corr_smoke_vs_futureEFG": 0.231,
+    "a_corr_pastEFG_vs_futureEFG": 0.552,
+    "a_n_players": 225.0,
+    "b_decomp_adjR2": 0.216,
+    "b_decomp_beta_expectedFG": 0.3596,
+    "b_decomp_p_expectedFG": 0.0,
+    "b_decomp_beta_smoke": 0.6517,
+    "b_decomp_p_smoke": 0.0,
+    "b_legacy_beta_smoke": -0.3687,
+    "b_legacy_p_smoke": 0.0233,
+    "c_corr_smoke_vs_futureSMOKE": 0.397,
+    "c_corr_pastEFG_vs_futureSMOKE": 0.314,
+    "c_adjR2_efg_only": 0.094,
+    "c_adjR2_efg_plus_smoke": 0.162,
+    "c_beta_smoke": 0.779,
+    "c_p_smoke": 0.0,
+    "c_n_players": 208.0
+  },
+  "confounds": {
+    "corr_smoke_vs_opp_fg_allowed": 0.0601,
+    "corr_smoke_vs_home_share": -0.0503,
+    "r2_context": 0.0059,
+    "spearman_before_after": 0.9959,
+    "top20_mean_abs_shift": 1.15,
+    "top20_max_abs_shift": 5.0,
+    "top6_unchanged": 0.0,
+    "n_players": 266.0
+  },
+  "application": {
+    "fg_r2_from_difficulty": 0.5941187378624577,
+    "corr_difficulty_vs_smoke": -0.19377669449704168,
+    "smoke_true_skill_share": 0.4798684014637006,
+    "tau": 0.025985065710484333,
+    "per_shot_residual_var": 0.22824417322804838,
+    "shots_for_reliability": {
+      "0.5": 338,
+      "0.6": 507,
+      "0.7": 789,
+      "0.8": 1352
+    },
+    "share_reaching_in_full_season": {
+      "0.5": 0.8421052631578947,
+      "0.6": 0.575187969924812,
+      "0.7": 0.2781954887218045,
+      "0.8": 0.018796992481203006
+    },
+    "official_fga_median": 571.5,
+    "example_pair_official_fg_pct": {
+      "dirk nowtizski": 0.459,
+      "demarcus cousins": 0.467
+    },
+    "example_pair": [
+      {
+        "player": "dirk nowtizski",
+        "shots": 816,
+        "fg_pct": 0.4620098039215686,
+        "expected_fg_pct": 0.4087210040740376,
+        "smoke_total": 43.48366067558527,
+        "ci": [
+          16.056201428174973,
+          71.64518060591071
+        ],
+        "smoke_rate_shrunk": 0.0362714568104876
+      },
+      {
+        "player": "demarcus cousins",
+        "shots": 788,
+        "fg_pct": 0.4644670050761421,
+        "expected_fg_pct": 0.4977444060959943,
+        "smoke_total": -26.222592003643516,
+        "ci": [
+          -51.55822581797838,
+          -0.1800802322104684
+        ],
+        "smoke_rate_shrunk": -0.0240397682383733
+      }
+    ]
+  },
+  "fairness": {
+    "kruskal_p": 0.1652,
+    "archetypes": {
+      "On-Ball Creators": {
+        "n": 66,
+        "weighted_mean_raw": 0.0036,
+        "p_weighted": 0.1327,
+        "mean_shrunk": 0.0005,
+        "ci_shrunk": [
+          -0.0044,
+          0.0053
+        ],
+        "p_shrunk": 0.8522,
+        "separable_share": 0.197
+      },
+      "Catch-and-Shoot": {
+        "n": 72,
+        "weighted_mean_raw": 0.0017,
+        "p_weighted": 0.5557,
+        "mean_shrunk": -0.0006,
+        "ci_shrunk": [
+          -0.0049,
+          0.0037
+        ],
+        "p_shrunk": 0.7769,
+        "separable_share": 0.125
+      },
+      "Mid-Range Scorers": {
+        "n": 64,
+        "weighted_mean_raw": -0.0055,
+        "p_weighted": 0.0446,
+        "mean_shrunk": -0.0064,
+        "ci_shrunk": [
+          -0.0106,
+          -0.0023
+        ],
+        "p_shrunk": 0.0029,
+        "separable_share": 0.2031
+      },
+      "Interior Finishers": {
+        "n": 64,
+        "weighted_mean_raw": -0.0023,
+        "p_weighted": 0.4087,
+        "mean_shrunk": -0.0032,
+        "ci_shrunk": [
+          -0.0089,
+          0.0026
+        ],
+        "p_shrunk": 0.2729,
+        "separable_share": 0.2812
+      }
+    }
+  }
+}

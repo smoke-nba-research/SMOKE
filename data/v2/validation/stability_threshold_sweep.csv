@@ -1,0 +1,16 @@
+min_shots,design,metric,n,pearson_r,pearson_p,spearman_rho
+50,per-season cross-fit,SMOKE,234,0.491,1.3667235428940078e-15,0.444
+50,per-season cross-fit,raw FG%,234,0.672,4.5759573449638803e-32,0.631
+50,per-season cross-fit,eFG%,234,0.413,4.9079378341494934e-11,0.375
+100,per-season cross-fit,SMOKE,214,0.478,1.3424884862065114e-13,0.433
+100,per-season cross-fit,raw FG%,214,0.673,1.444928295263522e-29,0.626
+100,per-season cross-fit,eFG%,214,0.435,2.7340294918403235e-11,0.393
+150,per-season cross-fit,SMOKE,184,0.518,4.91287947864333e-14,0.439
+150,per-season cross-fit,raw FG%,184,0.709,1.841971030657296e-29,0.607
+150,per-season cross-fit,eFG%,184,0.495,8.999046621086801e-13,0.406
+200,per-season cross-fit,SMOKE,145,0.507,7.419769377202048e-11,0.426
+200,per-season cross-fit,raw FG%,145,0.633,1.3834931731423552e-17,0.601
+200,per-season cross-fit,eFG%,145,0.418,1.7329900485851669e-07,0.399
+250,per-season cross-fit,SMOKE,111,0.541,8.509389854353093e-10,0.479
+250,per-season cross-fit,raw FG%,111,0.7,1.1858527055343438e-17,0.695
+250,per-season cross-fit,eFG%,111,0.5,2.314742431981844e-08,0.45
